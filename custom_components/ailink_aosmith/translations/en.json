@@ -16,7 +16,8 @@
     },
     "errors": {
       "no_devices": "No devices found with these credentials.",
-      "auth_error": "Authentication failed, please check your credentials."
+      "auth_error": "Authentication failed, please check your credentials.",
+      "cannot_connect": "Unable to connect to the service."
     }
   },
   "options": {

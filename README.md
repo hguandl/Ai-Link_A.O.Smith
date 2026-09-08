@@ -40,6 +40,13 @@ HomeKit 时长适配器借用风扇的百分比控件，名称明确标注“1%=
 - 未知、离线状态不再伪装成默认温度或关闭。
 - 出水温度传感器增加 HomeKit 所需的温度设备类别。
 
+## 认证与协议限制
+
+- 请求体按紧凑 UTF-8 JSON 序列化后，使用同一组字节计算 `md5data` 与签名；认证失败会进入 Home Assistant 原生重新认证流程。
+- 重新认证仅替换令牌，验证成功前不会修改已保存凭证；集成不实现未经验证的自动令牌刷新。
+- 回归测试使用合成响应，不连接真实云端、不包含真实账号或设备数据；特定型号和设备仍需单独的用户授权验证。
+- 签名研究致谢 Doker9527 与 xiaoyawei 的公开研究。
+
 ## 安装与更新
 
 在 HACS 自定义仓库中添加 `https://github.com/mopocv/Ai-Link_A.O.Smith`，类别选 Integration，安装后重启 Home Assistant。也可以将 `custom_components/ailink_aosmith` 复制到 HA 的 `custom_components` 目录后重启。

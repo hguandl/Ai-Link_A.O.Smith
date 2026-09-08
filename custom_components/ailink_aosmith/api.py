@@ -1,20 +1,47 @@
 """A.O. Smith API client."""
+from __future__ import annotations
+
 import asyncio
-import aiohttp
-import json
-import time
 import hashlib
-import uuid
+import json
 import logging
-from typing import Dict, Any, Optional, List
+import time
+import uuid
+from typing import Any, Dict, List, Optional
+
+import aiohttp
+
 from .const import API_BASE_URL, DEVICE_CATEGORY_WATER_HEATER
 
 _LOGGER = logging.getLogger(__name__)
 
+ENCODE_SALT = "AILink_2021#"
+SIGN_SECRET = "ng957stzh4zy3dts"
+
+
+class AOSmithAPIError(Exception):
+    """Base error for the AI-LiNK API."""
+
+
+class AOSmithAuthError(AOSmithAPIError):
+    """The supplied AI-LiNK credentials are not accepted."""
+
+
+class AOSmithNoDevicesError(AOSmithAPIError):
+    """The credentials were accepted but no supported device was returned."""
+
+
 class AOSmithAPI:
-    """A.O. Smith API client using pre-obtained access token."""
-    
-    def __init__(self, access_token: str, user_id: str, family_id: str, cookie: str = None, mobile: str = None):
+    """A.O. Smith API client using a pre-obtained access token."""
+
+    def __init__(
+        self,
+        access_token: str,
+        user_id: str,
+        family_id: str,
+        cookie: str | None = None,
+        mobile: str | None = None,
+    ) -> None:
         """Initialize the API client."""
         self._access_token = access_token.removeprefix("Bearer ").strip()
         self._user_id = user_id
@@ -23,209 +50,181 @@ class AOSmithAPI:
         self._mobile = mobile
         self._session: Optional[aiohttp.ClientSession] = None
         self._is_authenticated = False
-        
-    async def async_authenticate(self):
-        """Create session and verify authentication."""
+
+    async def async_authenticate(self) -> None:
+        """Create a session and verify the supplied credentials."""
         if self._session:
             await self.close()
-            
+
+        self._is_authenticated = False
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-        
         try:
-            # Test authentication by trying to get devices
             devices = await self.async_get_devices()
-            if devices:
-                self._is_authenticated = True
-                _LOGGER.info("Authentication successful, found %d devices", len(devices))
-            else:
-                raise Exception("No devices found - authentication may have failed")
-        except Exception as e:
+            if not devices:
+                raise AOSmithNoDevicesError("No devices found")
+            self._is_authenticated = True
+            _LOGGER.info("Authentication succeeded")
+        except AOSmithAPIError:
             await self.close()
-            raise Exception(f"Authentication failed: {e}")
-    
+            raise
+        except Exception:
+            await self.close()
+            raise AOSmithAPIError("Authentication failed") from None
+
     async def async_get_devices(self) -> List[Dict[str, Any]]:
-        """Get list of user devices using getHomepageV2 endpoint."""
-        if not self._session:
-            raise Exception("API not authenticated")
-            
-        encode = self._generate_encode(self._user_id)
-        
+        """Get the user's water-heater devices."""
         payload = {
-            "encode": encode,
-            "homePageVersion": "3", 
+            "encode": self._generate_encode(self._user_id),
+            "homePageVersion": "3",
             "userId": self._user_id,
-            "familyId": self._family_id
+            "familyId": self._family_id,
         }
-        
-        headers = await self._generate_headers(payload)
-        
-        _LOGGER.debug("Getting devices with payload: %s", payload)
-        
-        try:
-            async with self._session.post(
-                f"{API_BASE_URL}/AiLinkService/appDevice/getHomepageV2",
-                json=payload,
-                headers=headers
-            ) as response:
-                response_text = await response.text()
-                
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                        _LOGGER.debug("Device list response status: %s", data.get("status"))
-                        
-                        if data.get("status") == 200:
-                            info = data.get("info", {})
-                            
-                            # Extract devices from multiple possible locations
-                            devices = []
-                            
-                            # From devInfoItemInfoList
-                            if "devInfoItemInfoList" in info:
-                                devices.extend(info["devInfoItemInfoList"])
-                                _LOGGER.debug("Found %d devices in devInfoItemInfoList", len(info["devInfoItemInfoList"]))
-                            
-                            # From roomInfoItemInfoList
-                            if not devices and "roomInfoItemInfoList" in info:
-                                for room_info in info["roomInfoItemInfoList"]:
-                                    if "deviceList" in room_info:
-                                        devices.extend(room_info["deviceList"])
-                                        _LOGGER.debug("Found %d devices in room %s", 
-                                                    len(room_info["deviceList"]), room_info.get("roomName"))
-                            
-                            # Filter water heater devices
-                            water_heaters = [
-                                device for device in devices 
-                                if str(device.get("deviceCategory")) == DEVICE_CATEGORY_WATER_HEATER
-                            ]
-                            
-                            _LOGGER.info("Found %d water heater devices", len(water_heaters))
-                            for device in water_heaters:
-                                _LOGGER.info("Device: %s (ID: %s, Category: %s, Model: %s)", 
-                                           device.get("productName"), 
-                                           device.get("deviceId"),
-                                           device.get("deviceCategory"),
-                                           device.get("productModel"))
-                            
-                            return water_heaters
-                        else:
-                            error_msg = f"API returned error status: {data.get('status')}, message: {data.get('msg')}"
-                            _LOGGER.error(error_msg)
-                            raise Exception(error_msg)
-                    except json.JSONDecodeError as e:
-                        error_msg = f"Failed to parse JSON response: {e}, raw response: {response_text[:200]}"
-                        _LOGGER.error(error_msg)
-                        raise Exception(error_msg)
-                else:
-                    error_msg = f"HTTP error {response.status}: {response_text[:200]}"
-                    _LOGGER.error(error_msg)
-                    raise Exception(error_msg)
-                    
-        except asyncio.TimeoutError:
-            error_msg = "Timeout while getting devices"
-            _LOGGER.error(error_msg)
-            raise Exception(error_msg)
-        except Exception as e:
-            error_msg = f"Failed to get devices: {e}"
-            _LOGGER.error(error_msg)
-            raise Exception(error_msg)
-            
-    async def async_get_device_status(self, device_id: str) -> Optional[Dict[str, Any]]:
-        """Get current device status."""
-        if not self._session:
-            raise Exception("API not authenticated")
-            
-        encode = self._generate_encode(device_id)
-        
+        data = await self._post_json(
+            "/AiLinkService/appDevice/getHomepageV2", payload
+        )
+        self._require_success(data)
+        info = data.get("info")
+        if not isinstance(info, dict):
+            raise AOSmithAPIError("Invalid device response")
+
+        devices: list[dict[str, Any]] = []
+        listed = info.get("devInfoItemInfoList")
+        if isinstance(listed, list):
+            devices.extend(item for item in listed if isinstance(item, dict))
+        if not devices:
+            rooms = info.get("roomInfoItemInfoList")
+            if isinstance(rooms, list):
+                for room in rooms:
+                    if not isinstance(room, dict):
+                        continue
+                    room_devices = room.get("deviceList")
+                    if isinstance(room_devices, list):
+                        devices.extend(
+                            item for item in room_devices if isinstance(item, dict)
+                        )
+
+        return [
+            device
+            for device in devices
+            if str(device.get("deviceCategory")) == DEVICE_CATEGORY_WATER_HEATER
+        ]
+
+    async def async_get_device_status(self, device_id: str) -> Dict[str, Any]:
+        """Get current status for one device."""
         payload = {
             "userId": self._user_id,
             "familyId": self._family_id,
             "deviceId": device_id,
-            "encode": encode
+            "encode": self._generate_encode(device_id),
         }
-        
-        headers = await self._generate_headers(payload)
-        
-        try:
-            async with self._session.post(
-                f"{API_BASE_URL}/AiLinkService/appDevice/getDeviceCurrInfo",
-                json=payload,
-                headers=headers
-            ) as response:
-                response_text = await response.text()
-                
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                        
-                        if data.get("status") == 200:
-                            info = data.get("info", {})
-                            _LOGGER.debug("Device status info for %s - productModel: %s", 
-                                        device_id, info.get("productModel"))
-                            return info
-                        else:
-                            _LOGGER.warning("API error for device %s: %s", device_id, data.get("msg"))
-                            return None
-                    except json.JSONDecodeError as e:
-                        _LOGGER.warning("Failed to parse device status JSON for %s: %s", device_id, e)
-                        return None
-                else:
-                    _LOGGER.warning("HTTP error for device %s: %s", device_id, response.status)
-                    return None
-                    
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Timeout getting device status for %s", device_id)
-            return None
-        except Exception as e:
-            _LOGGER.warning("Failed to get device status for %s: %s", device_id, e)
-            return None
-    
-    async def async_send_command(self, device_id: str, service_identifier: str, input_data: Dict[str, Any] = None, *, device_type: str = "JSQ31-VJS"):
-        """Send control command to device."""
-        if not self._session:
-            raise Exception("API not authenticated")
-            
+        data = await self._post_json(
+            "/AiLinkService/appDevice/getDeviceCurrInfo", payload
+        )
+        self._require_success(data)
+        info = data.get("info")
+        if not isinstance(info, dict):
+            raise AOSmithAPIError("Invalid device status response")
+        return info
+
+    async def async_send_command(
+        self,
+        device_id: str,
+        service_identifier: str,
+        input_data: Dict[str, Any] | None = None,
+        *,
+        device_type: str = "JSQ31-VJS",
+    ) -> Dict[str, Any]:
+        """Send one control command; writes are deliberately not retried."""
         if input_data is None:
             input_data = {}
-
         payload = {
             "userId": self._user_id,
             "familyId": self._family_id,
             "appSource": 2,
             "commandSource": 1,
             "invokeTime": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "payLoad": json.dumps({
-                "profile": {
-                    "deviceId": device_id,
-                    "productType": "19",
-                    "deviceType": device_type
+            "payLoad": json.dumps(
+                {
+                    "profile": {
+                        "deviceId": device_id,
+                        "productType": "19",
+                        "deviceType": device_type,
+                    },
+                    "service": {
+                        "identifier": service_identifier,
+                        "inputData": input_data,
+                    },
                 },
-                "service": {
-                    "identifier": service_identifier,
-                    "inputData": input_data
-                }
-            }, ensure_ascii=False)
+                ensure_ascii=False,
+            ),
         }
+        data = await self._post_json("/AiLinkService/device/invokeMethod", payload)
+        self._require_success(data)
+        return data
 
-        headers = await self._generate_headers(payload)
+    async def _post_json(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """POST one compact JSON body and decode one JSON response."""
+        if self._session is None:
+            raise AOSmithAPIError("API session unavailable")
 
-        async with self._session.post(
-            f"{API_BASE_URL}/AiLinkService/device/invokeMethod",
-            json=payload,
-            headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            if not isinstance(data, dict) or str(data.get("status")) != "200":
-                raise ValueError(f"Device rejected {service_identifier}: status={data.get('status') if isinstance(data, dict) else 'invalid response'}")
-            return data
+        body = self._serialize_payload(payload)
+        headers = self._generate_headers(payload, body=body)
+        try:
+            async with self._session.post(
+                f"{API_BASE_URL}{path}",
+                data=body,
+                headers=headers,
+                allow_redirects=False,
+            ) as response:
+                if response.status in (401, 403):
+                    raise AOSmithAuthError("Authentication failed")
+                if response.status != 200:
+                    raise AOSmithAPIError("API request failed")
+                try:
+                    data = await response.json()
+                except Exception:
+                    raise AOSmithAPIError("Invalid API response") from None
+        except (AOSmithAuthError, AOSmithAPIError):
+            raise
+        except asyncio.TimeoutError:
+            raise AOSmithAPIError("API request timed out") from None
+        except (aiohttp.ClientError, OSError):
+            raise AOSmithAPIError("API request failed") from None
+        except Exception:
+            raise AOSmithAPIError("API request failed") from None
 
-    async def _generate_headers(self, payload: Dict[str, Any]) -> Dict[str, str]:
-        """Generate request headers."""
+        if not isinstance(data, dict):
+            raise AOSmithAPIError("Invalid API response")
+        return data
+
+    @staticmethod
+    def _require_success(data: Dict[str, Any]) -> None:
+        """Reject business-level failures without treating them as auth errors."""
+        if str(data.get("status")) != "200":
+            raise AOSmithAPIError("API rejected the request")
+
+    @staticmethod
+    def _serialize_payload(payload: Dict[str, Any]) -> bytes:
+        """Serialize a request once using the official compact UTF-8 form."""
+        try:
+            return json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            raise AOSmithAPIError("Invalid API request") from None
+
+    def _generate_headers(
+        self, payload: Dict[str, Any], *, body: bytes | None = None
+    ) -> Dict[str, str]:
+        """Generate headers whose hash/signature match the transmitted bytes."""
+        body = body if body is not None else self._serialize_payload(payload)
+        md5data = hashlib.md5(body).hexdigest()
         timestamp = str(int(time.time() * 1000))
         nonce = str(uuid.uuid4()).upper()
-        
-        headers = {
+        sign = hashlib.md5(
+            f"{md5data}{timestamp}{nonce}{SIGN_SECRET}".encode("utf-8")
+        ).hexdigest()
+        return {
             "Host": "ailink-api.hotwater.com.cn",
             "Authorization": f"Bearer {self._access_token}",
             "version": "V1.0.1",
@@ -235,41 +234,32 @@ class AOSmithAPI:
             "nonce": nonce,
             "Accept": "*/*",
             "source": "IOS",
-            "md5data": self._generate_md5data(payload),
+            "md5data": md5data,
             "Accept-Language": "zh-Hans-CN;q=1",
             "Content-Type": "application/json",
             "traceId": f"{timestamp}-69861-{self._user_id}-00",
             "User-Agent": "AI jia zhi kong/2.2.5 (iPhone; iOS 26.0; Scale/3.00)",
             "Cookie": self._cookie or "",
-            "sign": "",
+            "sign": sign,
         }
-        
-        return headers
-    
+
     def _generate_md5data(self, payload: Dict[str, Any]) -> str:
-        """Generate md5data by hashing the JSON payload."""
-        try:
-            json_str = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
-            md5_hash = hashlib.md5(json_str.encode('utf-8')).hexdigest()
-            return md5_hash
-        except Exception as e:
-            _LOGGER.error("Failed to generate md5data: %s", e)
-            return "7502271d2d3217c6aa2d80e21ebeed51"
-    
-    def _generate_encode(self, input_str: str) -> str:
-        """Generate encode parameter."""
-        timestamp = str(int(time.time()))
-        input_data = f"{input_str}{timestamp}"
-        return hashlib.md5(input_data.encode()).hexdigest()
-    
+        """Generate md5data for the exact compact request representation."""
+        return hashlib.md5(self._serialize_payload(payload)).hexdigest()
+
+    def _generate_encode(self, target_id: str) -> str:
+        """Generate the official family/target request digest."""
+        value = f"{self._family_id}{target_id}{ENCODE_SALT}"
+        return hashlib.md5(value.encode("utf-8")).hexdigest()
+
     @property
     def is_authenticated(self) -> bool:
-        """Return if authenticated."""
+        """Return whether the last authentication check succeeded."""
         return self._is_authenticated
-    
-    async def close(self):
-        """Close the session."""
+
+    async def close(self) -> None:
+        """Close the HTTP session."""
         if self._session:
             await self._session.close()
             self._session = None
-            self._is_authenticated = False
+        self._is_authenticated = False

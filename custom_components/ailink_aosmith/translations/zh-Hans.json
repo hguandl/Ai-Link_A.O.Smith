@@ -16,7 +16,8 @@
     },
     "errors": {
       "no_devices": "未找到任何设备，请检查凭证。",
-      "auth_error": "认证失败，请检查凭证是否正确。"
+      "auth_error": "认证失败，请检查凭证是否正确。",
+      "cannot_connect": "无法连接到服务。"
     }
   },
   "options": {
