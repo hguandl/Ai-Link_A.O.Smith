@@ -130,9 +130,8 @@ class SignedApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_json_auth_status_is_typed_auth_failure(self):
         api = self.make_api(FakeResponse(payload={"status": 401, "msg": "expired"}))
-        with self.assertRaises(Exception) as caught:
+        with self.assertRaises(AOSmithAuthError):
             await api.async_get_devices()
-        self.assertEqual(type(caught.exception).__name__, "AOSmithAuthError")
 
     async def test_business_command_failure_does_not_retry(self):
         response = FakeResponse(payload={"status": 500, "msg": "rejected"})
