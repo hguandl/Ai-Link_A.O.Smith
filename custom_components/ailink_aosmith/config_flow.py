@@ -109,12 +109,15 @@ class AOSmithConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if not devices:
                         errors["base"] = "no_devices"
                     else:
-                        new_data = dict(entry.data)
-                        new_data[CONF_ACCESS_TOKEN] = token
-                        self.hass.config_entries.async_update_entry(
-                            entry, data=new_data
+                        return self.async_update_reload_and_abort(
+                            entry,
+                            data_updates={CONF_ACCESS_TOKEN: token},
+                            reason=(
+                                "reconfigure_successful"
+                                if step_id == "reconfigure"
+                                else "reauth_successful"
+                            ),
                         )
-                        return self.async_abort(reason="reauth_successful")
                 except Exception as err:
                     errors["base"] = self._flow_error(err)
                     _LOGGER.error("Replacement token validation failed")

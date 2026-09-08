@@ -202,6 +202,8 @@ class AOSmithAPI:
     @staticmethod
     def _require_success(data: Dict[str, Any]) -> None:
         """Reject business-level failures without treating them as auth errors."""
+        if str(data.get("status")) == "401":
+            raise AOSmithAuthError("Authentication failed")
         if str(data.get("status")) != "200":
             raise AOSmithAPIError("API rejected the request")
 

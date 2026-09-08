@@ -4,20 +4,38 @@
     "step": {
       "user": {
         "title": "Configure Ai-Link A.O. Smith",
-        "description": "Provide your Ai-Link credentials (access token, user id, family id, cookie). Optional: mobile."
+        "description": "Enter the credentials from your own AI-LiNK app. Cookie and mobile number are optional.",
+        "data": {
+          "access_token": "Access token",
+          "user_id": "User ID",
+          "family_id": "Family ID",
+          "cookie": "Cookie",
+          "mobile": "Mobile number"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Update access token",
+        "description": "Enter a new token for the same account and family. The integration will reload after validation.",
+        "data": {
+          "access_token": "New access token"
+        }
+      },
+      "reconfigure": {
+        "title": "Replace access token",
+        "description": "Replace only the token. The existing account, family and device identities will be preserved.",
+        "data": {
+          "access_token": "New access token"
+        }
       }
     },
-    "data": {
-      "access_token": "Access Token",
-      "user_id": "User ID",
-      "family_id": "Family ID",
-      "cookie": "Cookie",
-      "mobile": "Mobile Number"
+    "error": {
+      "no_devices": "No supported devices found with these credentials.",
+      "auth_error": "Authentication failed. Please check the access token.",
+      "cannot_connect": "Unable to connect to the AI-LiNK service."
     },
-    "errors": {
-      "no_devices": "No devices found with these credentials.",
-      "auth_error": "Authentication failed, please check your credentials.",
-      "cannot_connect": "Unable to connect to the service."
+    "abort": {
+      "reauth_successful": "Authentication updated successfully.",
+      "reconfigure_successful": "Configuration updated successfully."
     }
   },
   "options": {

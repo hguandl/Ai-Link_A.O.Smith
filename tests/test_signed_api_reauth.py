@@ -128,6 +128,12 @@ class SignedApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(type(caught.exception).__name__, "AOSmithAPIError")
             self.assertNotIn("secret-token", str(caught.exception))
 
+    async def test_json_auth_status_is_typed_auth_failure(self):
+        api = self.make_api(FakeResponse(payload={"status": 401, "msg": "expired"}))
+        with self.assertRaises(Exception) as caught:
+            await api.async_get_devices()
+        self.assertEqual(type(caught.exception).__name__, "AOSmithAuthError")
+
     async def test_business_command_failure_does_not_retry(self):
         response = FakeResponse(payload={"status": 500, "msg": "rejected"})
         api = self.make_api(response)
@@ -148,10 +154,11 @@ class ReauthSurfaceTests(unittest.TestCase):
             path = f"custom_components/ailink_aosmith/translations/{language}.json"
             with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
-            errors = data["config"]["errors"]
+            errors = data["config"]["error"]
             self.assertIn("auth_error", errors)
             self.assertIn("cannot_connect", errors)
             self.assertIn("no_devices", errors)
+            self.assertIn("reauth_successful", data["config"]["abort"])
 
 
 @unittest.skipUnless(api_module.aiohttp, "aiohttp required")
@@ -268,13 +275,19 @@ class RuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
             options={"update_interval": 60},
         )
         update_entry = Mock()
+        reload_abort = Mock(return_value={"type": "abort", "reason": "reauth_successful"})
         flow = AOSmithConfigFlow()
         flow.hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=update_entry))
+        flow.async_update_reload_and_abort = reload_abort
         flow._reauth_entry = entry
         flow._get_devices = AsyncMock(return_value=[{"deviceId": "d1"}])
         result = await flow.async_step_reauth_confirm({"access_token": "new-token"})
         self.assertEqual(result["type"], "abort")
-        update_entry.assert_called_once_with(entry, data={"access_token": "new-token", "user_id": "u", "family_id": "f", "cookie": "c"})
+        update_entry.assert_not_called()
+        reload_abort.assert_called_once_with(
+            entry, data_updates={"access_token": "new-token"}, reason="reauth_successful"
+        )
+        self.assertEqual(entry.data, {"access_token": "old-token", "user_id": "u", "family_id": "f", "cookie": "c"})
         self.assertEqual(entry.options, {"update_interval": 60})
 
 

@@ -4,20 +4,38 @@
     "step": {
       "user": {
         "title": "配置 Ai-Link 史密斯",
-        "description": "提供 Ai-Link 凭证 (access token, user id, family id, cookie)。可选：手机号。"
+        "description": "填写您自己的 AI-LiNK App 认证信息。Cookie 与手机号为可选项。",
+        "data": {
+          "access_token": "访问令牌",
+          "user_id": "用户 ID",
+          "family_id": "家庭 ID",
+          "cookie": "Cookie",
+          "mobile": "手机号"
+        }
+      },
+      "reauth_confirm": {
+        "title": "更新访问令牌",
+        "description": "输入同一账号与家庭的新令牌。验证成功后集成将重新加载。",
+        "data": {
+          "access_token": "新访问令牌"
+        }
+      },
+      "reconfigure": {
+        "title": "替换访问令牌",
+        "description": "仅替换令牌，保留已有账号、家庭与设备标识。",
+        "data": {
+          "access_token": "新访问令牌"
+        }
       }
     },
-    "data": {
-      "access_token": "访问令牌 (access_token)",
-      "user_id": "用户 ID (user_id)",
-      "family_id": "家庭 ID (family_id)",
-      "cookie": "Cookie",
-      "mobile": "手机号"
+    "error": {
+      "no_devices": "未找到支持的设备，请检查认证信息。",
+      "auth_error": "认证失败，请检查访问令牌。",
+      "cannot_connect": "无法连接到 AI-LiNK 服务。"
     },
-    "errors": {
-      "no_devices": "未找到任何设备，请检查凭证。",
-      "auth_error": "认证失败，请检查凭证是否正确。",
-      "cannot_connect": "无法连接到服务。"
+    "abort": {
+      "reauth_successful": "认证信息已更新。",
+      "reconfigure_successful": "配置信息已更新。"
     }
   },
   "options": {
