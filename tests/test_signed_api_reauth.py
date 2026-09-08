@@ -88,7 +88,7 @@ class SignedApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(body, bytes)
         self.assertFalse(kwargs["allow_redirects"])
         expected = json.dumps(
-            {"encode": api._generate_encode("用户-α"), "homePageVersion": "3", "userId": "用户-α", "familyId": "家庭-β"},
+            {"encode": api._generate_encode(), "homePageVersion": "3", "userId": "用户-α", "familyId": "家庭-β"},
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -97,9 +97,11 @@ class SignedApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["headers"]["md5data"], md5data)
         self.assertEqual(kwargs["headers"]["sign"], hashlib.md5((md5data + "1700000000000" + nonce + "ng957stzh4zy3dts").encode()).hexdigest())
 
-    def test_encode_uses_family_target_and_salt(self):
+    def test_encode_uses_sorted_request_values_and_salt(self):
         api = api_module.AOSmithAPI("token", "user", "family")
-        expected = hashlib.md5("familytargetAILink_2021#".encode("utf-8")).hexdigest()
+        expected = hashlib.md5("familyuserAILink_2021#".encode("utf-8")).hexdigest()
+        self.assertEqual(api._generate_encode(), expected)
+        expected = hashlib.md5("targetfamilyuserAILink_2021#".encode("utf-8")).hexdigest()
         self.assertEqual(api._generate_encode("target"), expected)
 
     async def test_auth_http_errors_are_typed_and_redacted(self):

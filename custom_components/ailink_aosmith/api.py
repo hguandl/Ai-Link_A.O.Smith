@@ -16,6 +16,8 @@ from .const import API_BASE_URL, DEVICE_CATEGORY_WATER_HEATER
 _LOGGER = logging.getLogger(__name__)
 
 ENCODE_SALT = "AILink_2021#"
+# gitleaks:allow — public client-side protocol constant, not an account credential.
+# Source: official AI-LiNK H5 module 45760, downloaded 2026-09-09.
 SIGN_SECRET = "ng957stzh4zy3dts"
 
 
@@ -74,7 +76,7 @@ class AOSmithAPI:
     async def async_get_devices(self) -> List[Dict[str, Any]]:
         """Get the user's water-heater devices."""
         payload = {
-            "encode": self._generate_encode(self._user_id),
+            "encode": self._generate_encode(),
             "homePageVersion": "3",
             "userId": self._user_id,
             "familyId": self._family_id,
@@ -247,9 +249,12 @@ class AOSmithAPI:
         """Generate md5data for the exact compact request representation."""
         return hashlib.md5(self._serialize_payload(payload)).hexdigest()
 
-    def _generate_encode(self, target_id: str) -> str:
-        """Generate the official family/target request digest."""
-        value = f"{self._family_id}{target_id}{ENCODE_SALT}"
+    def _generate_encode(self, device_id: str | None = None) -> str:
+        """Generate the sorted-value digest used by the official H5 client."""
+        values = {"familyId": self._family_id, "userId": self._user_id}
+        if device_id is not None:
+            values["deviceId"] = device_id
+        value = "".join(str(values[key]) for key in sorted(values)) + ENCODE_SALT
         return hashlib.md5(value.encode("utf-8")).hexdigest()
 
     @property
