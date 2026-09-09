@@ -1,0 +1,8 @@
+title = "AI-LiNK integration gitleaks configuration"
+
+[allowlist]
+description = "The exact-signing constant is embedded in the public official AI-LiNK H5 client and is protocol data, not an account credential. Keep the path and exact assignment narrow."
+condition = "AND"
+paths = ["^custom_components/ailink_aosmith/api\\.py$"]
+regexes = ['^SIGN_SECRET = "ng957stzh4zy3dts"$']
+regexTarget = "match"
