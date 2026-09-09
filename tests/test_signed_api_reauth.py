@@ -219,6 +219,25 @@ class RuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConfigEntryAuthFailed):
             await self.coordinator(api)._async_update_data()
 
+    async def test_one_status_failure_does_not_discard_other_devices(self):
+        api = SimpleNamespace(
+            is_authenticated=True,
+            async_get_devices=AsyncMock(return_value=[
+                {"deviceId": "d1", "deviceCategory": "19"},
+                {"deviceId": "d2", "deviceCategory": "19"},
+            ]),
+            async_get_device_status=AsyncMock(side_effect=[
+                {"devState": 1, "productModel": "JSQ31-VJS"},
+                AOSmithAPIError("temporary failure"),
+            ]),
+        )
+
+        data = await self.coordinator(api)._async_update_data()
+
+        self.assertTrue(data["d1"]["_status_available"])
+        self.assertEqual(data["d1"]["productModel"], "JSQ31-VJS")
+        self.assertFalse(data["d2"]["_status_available"])
+
     async def test_command_auth_failure_has_no_optimistic_update(self):
         from homeassistant.exceptions import ConfigEntryAuthFailed
 

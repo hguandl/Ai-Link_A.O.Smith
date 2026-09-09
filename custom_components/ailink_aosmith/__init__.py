@@ -165,10 +165,23 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
                 device_id = device.get("deviceId")
                 if not device_id:
                     continue
-                status = await asyncio.wait_for(
-                    self.api.async_get_device_status(device_id), timeout=10.0
-                )
-                data[device_id] = {**device, **status, "_status_available": True}
+                try:
+                    status = await asyncio.wait_for(
+                        self.api.async_get_device_status(device_id), timeout=10.0
+                    )
+                    if not status:
+                        raise AOSmithAPIError("Device status unavailable")
+                    data[device_id] = {
+                        **device,
+                        **status,
+                        "_status_available": True,
+                    }
+                except AOSmithAuthError:
+                    raise
+                except (AOSmithAPIError, asyncio.TimeoutError):
+                    # A transient failure for one device must not discard fresh
+                    # data from the other devices in the same account.
+                    data[device_id] = {**device, "_status_available": False}
             return data
         except AOSmithAuthError:
             raise ConfigEntryAuthFailed("Authentication failed") from None

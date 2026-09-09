@@ -2,7 +2,7 @@
 
 用于 AI 家智控燃气热水器的 Home Assistant 自定义集成。通过史密斯云端控制设备，支持 HomeKit Bridge。
 
-## v1.2.0 功能
+## v1.3.0 功能
 
 | 功能 | Home Assistant | Apple 家庭（通过 HomeKit Bridge） |
 |---|---|---|
