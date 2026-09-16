@@ -1,12 +1,13 @@
 """The Ai-Link A.O. Smith integration."""
 import asyncio
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
 from .protocol import extract_output_data, temperature_command, numeric
 
@@ -20,6 +21,10 @@ from .api import AOSmithAPI, AOSmithAPIError, AOSmithAuthError
 from .translations import async_load_translation, get_language
 
 _LOGGER = logging.getLogger(__name__)
+TOKEN_RENEW_AHEAD_SECONDS = 12 * 60
+TOKEN_RENEW_GAP_SECONDS = 3 * 60
+TOKEN_EXPIRED_RENEW_GAP_SECONDS = 30 * 60
+TOKEN_FAILURE_RENEW_GAP_SECONDS = 5 * 60
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -30,13 +35,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     api = None
     try:
+        async def async_save_rotated_token(token: str) -> None:
+            """Persist a cloud-rotated token without logging or reloading."""
+            if entry.data.get("access_token") == token:
+                return
+            hass.config_entries.async_update_entry(
+                entry,
+                data={**entry.data, "access_token": token},
+            )
+
         # Initialize API
         api = AOSmithAPI(
             access_token=entry.data["access_token"],
             user_id=entry.data["user_id"],
             family_id=entry.data["family_id"],
             cookie=entry.data.get("cookie"),
-            mobile=entry.data.get("mobile")
+            mobile=entry.data.get("mobile"),
+            on_token_update=async_save_rotated_token,
         )
         
         await api.async_authenticate()
@@ -70,14 +85,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     len(coordinator.data))
         return True
         
-    except ConfigEntryAuthFailed:
-        if api is not None:
-            await api.close()
-        raise
     except AOSmithAuthError:
         if api is not None:
             await api.close()
-        raise ConfigEntryAuthFailed("Authentication failed") from None
+        # Keep retrying setup: an old token can become usable again as soon as
+        # the phone app rotates the account token.
+        raise ConfigEntryNotReady("Authentication is temporarily unavailable") from None
     except Exception:
         if api is not None:
             await api.close()
@@ -104,6 +117,9 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
         self._command_lock = asyncio.Lock()
         self.data = {}
         self.translation = {}  # 初始化翻译属性
+        self._last_token_sync = None
+        self._last_failure_token_sync = None
+        self._post_expiry_attempted_token = None
         
         super().__init__(
             hass,
@@ -116,7 +132,7 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
         """Serialize writes and require a fresh device report to confirm success."""
         async with self._command_lock:
             try:
-                status = await self.api.async_get_device_status(device_id)
+                status = await self._async_get_recoverable_status(device_id)
                 if not status or str(status.get("devState", "1")) == "0":
                     raise HomeAssistantError("Device status is unavailable")
                 output = extract_output_data(status)
@@ -144,10 +160,9 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
             except HomeAssistantError:
                 raise
             except AOSmithAuthError:
-                config_entry = getattr(self, "config_entry", None)
-                if config_entry is not None:
-                    config_entry.async_start_reauth_if_available(self.hass)
-                raise ConfigEntryAuthFailed("Authentication failed") from None
+                raise HomeAssistantError(
+                    "Access token is temporarily unavailable; open the AI-LiNK app once or replace the token in integration settings"
+                ) from None
             except AOSmithAPIError:
                 raise HomeAssistantError("Device command failed") from None
             except Exception:
@@ -159,6 +174,7 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
             if not self.api.is_authenticated:
                 await self.api.async_authenticate()
 
+            await self._async_sync_token()
             devices = await self.api.async_get_devices()
             data = {}
             for device in devices:
@@ -167,7 +183,7 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
                     continue
                 try:
                     status = await asyncio.wait_for(
-                        self.api.async_get_device_status(device_id), timeout=10.0
+                        self._async_get_recoverable_status(device_id), timeout=10.0
                     )
                     if not status:
                         raise AOSmithAPIError("Device status unavailable")
@@ -184,10 +200,75 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
                     data[device_id] = {**device, "_status_available": False}
             return data
         except AOSmithAuthError:
-            raise ConfigEntryAuthFailed("Authentication failed") from None
+            # Do not stop the coordinator: continued polling is what lets the
+            # integration adopt the next token produced by the phone app.
+            raise UpdateFailed("Authentication is temporarily unavailable") from None
         except asyncio.TimeoutError:
             raise UpdateFailed("Unable to update device data") from None
         except AOSmithAPIError:
             raise UpdateFailed("Unable to update device data") from None
         except Exception:
             raise UpdateFailed("Unable to update device data") from None
+
+    async def _async_get_recoverable_status(self, device_id):
+        """Read status and retry once if the cloud returned an empty auth record."""
+        status = await self.api.async_get_device_status(device_id)
+        if self._looks_authorised(status):
+            return status
+
+        if await self._async_sync_token(force=True):
+            status = await self.api.async_get_device_status(device_id)
+            if self._looks_authorised(status):
+                return status
+        raise AOSmithAuthError("Cloud returned an empty device record")
+
+    async def _async_sync_token(self, *, force=False):
+        """Synchronize an expiring/stale token without treating ``exp`` as failure."""
+        remaining = self.api.token_seconds_left
+        if not force and (
+            remaining is None or remaining > TOKEN_RENEW_AHEAD_SECONDS
+        ):
+            return False
+
+        now = time.monotonic()
+        if force:
+            gap = TOKEN_FAILURE_RENEW_GAP_SECONDS
+        elif remaining is not None and remaining <= 0:
+            gap = (
+                0
+                if self._post_expiry_attempted_token != self.api.access_token
+                else TOKEN_EXPIRED_RENEW_GAP_SECONDS
+            )
+        else:
+            gap = TOKEN_RENEW_GAP_SECONDS
+        last_attempt = (
+            self._last_failure_token_sync if force else self._last_token_sync
+        )
+        if last_attempt is not None and now - last_attempt < gap:
+            return False
+
+        self._last_token_sync = now
+        if force:
+            self._last_failure_token_sync = now
+        before = self.api.access_token
+        if remaining is not None and remaining <= 0:
+            self._post_expiry_attempted_token = before
+        await self.api.async_renew_token()
+        if self.api.access_token == before and remaining is not None and remaining <= 0:
+            await self.api.async_mint_token()
+        return self.api.access_token != before
+
+    @staticmethod
+    def _looks_authorised(status):
+        """Detect HTTP-200 empty records used by the cloud for rejected tokens."""
+        if not isinstance(status, dict):
+            return False
+        entity = status.get("appDeviceStatusInfoEntity")
+        entity = entity if isinstance(entity, dict) else {}
+        return bool(
+            status.get("productModel")
+            or status.get("productMajorClassCode")
+            or status.get("statusInfo")
+            or entity.get("statusInfo")
+            or status.get("deviceId")
+        )

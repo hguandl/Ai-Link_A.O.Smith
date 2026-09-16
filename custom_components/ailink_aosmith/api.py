@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import inspect
 import json
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import aiohttp
 
@@ -19,6 +21,7 @@ ENCODE_SALT = "AILink_2021#"
 # gitleaks:allow — public client-side protocol constant, not an account credential.
 # Source: official AI-LiNK H5 module 45760, downloaded 2026-09-09.
 SIGN_SECRET = "ng957stzh4zy3dts"
+AUTH_STATUSES = {"401", "403", "1001"}
 
 
 class AOSmithAPIError(Exception):
@@ -43,13 +46,15 @@ class AOSmithAPI:
         family_id: str,
         cookie: str | None = None,
         mobile: str | None = None,
+        on_token_update: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> None:
         """Initialize the API client."""
-        self._access_token = access_token.removeprefix("Bearer ").strip()
+        self._access_token = self._normalise_token(access_token)
         self._user_id = user_id
         self._family_id = family_id
         self._cookie = cookie
         self._mobile = mobile
+        self._on_token_update = on_token_update
         self._session: Optional[aiohttp.ClientSession] = None
         self._is_authenticated = False
 
@@ -160,11 +165,21 @@ class AOSmithAPI:
                 ensure_ascii=False,
             ),
         }
-        data = await self._post_json("/AiLinkService/device/invokeMethod", payload)
+        # A physical command is never replayed automatically: a response can be
+        # lost after the cloud has already accepted the write.
+        data = await self._post_json(
+            "/AiLinkService/device/invokeMethod", payload, retry_auth=False
+        )
         self._require_success(data)
         return data
 
-    async def _post_json(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _post_json(
+        self,
+        path: str,
+        payload: Dict[str, Any],
+        *,
+        retry_auth: bool = True,
+    ) -> Dict[str, Any]:
         """POST one compact JSON body and decode one JSON response."""
         if self._session is None:
             raise AOSmithAPIError("API session unavailable")
@@ -178,7 +193,12 @@ class AOSmithAPI:
                 headers=headers,
                 allow_redirects=False,
             ) as response:
+                await self._adopt_response_token(response.headers)
                 if response.status in (401, 403):
+                    if retry_auth and await self.async_renew_token():
+                        return await self._post_json(
+                            path, payload, retry_auth=False
+                        )
                     raise AOSmithAuthError("Authentication failed")
                 if response.status != 200:
                     raise AOSmithAPIError("API request failed")
@@ -197,12 +217,121 @@ class AOSmithAPI:
 
         if not isinstance(data, dict):
             raise AOSmithAPIError("Invalid API response")
+        if str(data.get("status")) in AUTH_STATUSES:
+            if retry_auth and await self.async_renew_token():
+                return await self._post_json(path, payload, retry_auth=False)
+            raise AOSmithAuthError("Authentication failed")
         return data
+
+    async def async_renew_token(self) -> bool:
+        """Adopt the account's newest token through ``getLastToken``.
+
+        The endpoint does not necessarily mint a token. It returns the newest
+        token already known for the account, and an old accepted token is enough
+        to ask for it.
+        """
+        if self._session is None:
+            return False
+        before = self._access_token
+        body = self._serialize_payload({"token": f"Bearer {before}"})
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json;charset=UTF-8",
+            "UserId": self._user_id,
+            "source": "IOS",
+            "version": "V1.0.1",
+        }
+        try:
+            async with self._session.post(
+                f"{API_BASE_URL}/AiLinkService/api/getLastToken",
+                data=body,
+                headers=headers,
+                allow_redirects=False,
+            ) as response:
+                await self._adopt_response_token(response.headers)
+                if response.status != 200:
+                    return self._access_token != before
+                try:
+                    data = await response.json()
+                except Exception:
+                    return self._access_token != before
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            return False
+
+        info = data.get("info") if isinstance(data, dict) else None
+        if isinstance(info, dict) and info.get("token"):
+            await self._set_token(str(info["token"]), reason="getLastToken")
+        return self._access_token != before
+
+    async def async_mint_token(self) -> bool:
+        """Ask a read-only app endpoint to re-issue a token in its response."""
+        before = self._access_token
+        payload = {
+            "familyId": self._family_id,
+            "userId": self._user_id,
+            "encode": self._generate_encode(),
+        }
+        try:
+            await self._post_json(
+                "/AiLinkService//appDevice/getAntifreeze",
+                payload,
+                retry_auth=False,
+            )
+        except AOSmithAPIError:
+            # Some token-minting endpoints return a business error while still
+            # carrying the replacement in the Authorization response header.
+            pass
+        return self._access_token != before
+
+    async def _adopt_response_token(self, headers: Any) -> None:
+        """Read a rotated token from a cloud response header, if present."""
+        value = None
+        if headers is not None:
+            value = headers.get("Authorization") or headers.get("authorization")
+        if value:
+            await self._set_token(str(value), reason="response header")
+
+    async def _set_token(self, token: str, *, reason: str) -> bool:
+        """Replace the in-memory token and persist it through the callback."""
+        token = self._normalise_token(token)
+        if not token or token == self._access_token:
+            return False
+        self._access_token = token
+        _LOGGER.info("AI-LiNK access token updated from %s", reason)
+        if self._on_token_update is not None:
+            result = self._on_token_update(token)
+            if inspect.isawaitable(result):
+                await result
+        return True
+
+    @staticmethod
+    def _normalise_token(token: str) -> str:
+        """Return a raw bearer token without logging or decoding its contents."""
+        token = token.strip()
+        if token.lower().startswith("bearer "):
+            return token[7:].strip()
+        return token
+
+    @property
+    def access_token(self) -> str:
+        """Return the current raw token for persistence and comparison."""
+        return self._access_token
+
+    @property
+    def token_seconds_left(self) -> float | None:
+        """Read the unverified JWT ``exp`` claim as a scheduling hint only."""
+        try:
+            payload = self._access_token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            data = json.loads(base64.urlsafe_b64decode(payload))
+            return float(data["exp"]) - time.time()
+        except Exception:
+            return None
 
     @staticmethod
     def _require_success(data: Dict[str, Any]) -> None:
         """Reject business-level failures without treating them as auth errors."""
-        if str(data.get("status")) == "401":
+        if str(data.get("status")) in AUTH_STATUSES:
             raise AOSmithAuthError("Authentication failed")
         if str(data.get("status")) != "200":
             raise AOSmithAPIError("API rejected the request")

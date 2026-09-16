@@ -15,10 +15,11 @@ from custom_components.ailink_aosmith.api import (
 
 
 class FakeResponse:
-    def __init__(self, status=200, payload=None, text=None):
+    def __init__(self, status=200, payload=None, text=None, headers=None):
         self.status = status
         self._payload = payload
         self._text = text if text is not None else json.dumps(payload or {})
+        self.headers = headers or {}
 
     async def text(self):
         return self._text
@@ -55,7 +56,8 @@ class FakeSession:
         self.calls.append((args, kwargs))
         if self.error:
             raise self.error
-        return ResponseContext(self.response)
+        response = self.response.pop(0) if isinstance(self.response, list) else self.response
+        return ResponseContext(response)
 
     async def close(self):
         pass
@@ -133,6 +135,36 @@ class SignedApiTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AOSmithAuthError):
             await api.async_get_devices()
 
+    async def test_response_authorization_header_is_adopted_and_persisted(self):
+        updates = []
+        response = FakeResponse(
+            payload={"status": 200, "info": {"devInfoItemInfoList": []}},
+            headers={"Authorization": "Bearer rotated-token"},
+        )
+        api = api_module.AOSmithAPI(
+            "old-token", "user", "family", on_token_update=updates.append
+        )
+        api._session = FakeSession(response)
+
+        await api.async_get_devices()
+
+        self.assertEqual(api.access_token, "rotated-token")
+        self.assertEqual(updates, ["rotated-token"])
+
+    async def test_get_last_token_adopts_newest_account_token(self):
+        api = self.make_api(FakeResponse(
+            payload={"status": 200, "info": {"token": "Bearer newest-token"}}
+        ))
+
+        self.assertTrue(await api.async_renew_token())
+
+        self.assertEqual(api.access_token, "newest-token")
+        args, kwargs = api._session.calls[0]
+        self.assertTrue(args[0].endswith("/AiLinkService/api/getLastToken"))
+        self.assertEqual(
+            json.loads(kwargs["data"]), {"token": "Bearer secret-token"}
+        )
+
     async def test_business_command_failure_does_not_retry(self):
         response = FakeResponse(payload={"status": 500, "msg": "rejected"})
         api = self.make_api(response)
@@ -171,11 +203,14 @@ class RuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
         coordinator.data = {"d1": {"waterTemp": "38"}}
         coordinator.async_set_updated_data = AsyncMock()
         coordinator.hass = SimpleNamespace()
+        coordinator._last_token_sync = None
+        coordinator._last_failure_token_sync = None
+        coordinator._post_expiry_attempted_token = None
         return coordinator
 
-    async def test_setup_auth_failure_is_config_entry_auth_failed(self):
+    async def test_setup_auth_failure_keeps_retrying(self):
         from custom_components.ailink_aosmith import async_setup_entry
-        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from homeassistant.exceptions import ConfigEntryNotReady
 
         class AuthFailAPI:
             def __init__(self, *args, **kwargs):
@@ -194,34 +229,42 @@ class RuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = SimpleNamespace(data={})
         with patch("custom_components.ailink_aosmith.AOSmithAPI", AuthFailAPI):
-            with self.assertRaises(ConfigEntryAuthFailed) as caught:
+            with self.assertRaises(ConfigEntryNotReady) as caught:
                 await async_setup_entry(hass, entry)
         self.assertNotIn("secret-token", repr(caught.exception))
 
-    async def test_poll_auth_failure_is_not_update_failed(self):
-        from homeassistant.exceptions import ConfigEntryAuthFailed
+    async def test_poll_auth_failure_keeps_coordinator_retrying(self):
+        from homeassistant.helpers.update_coordinator import UpdateFailed
 
         api = SimpleNamespace(
             is_authenticated=False,
             async_authenticate=AsyncMock(side_effect=AOSmithAuthError("secret")),
         )
-        with self.assertRaises(ConfigEntryAuthFailed):
+        with self.assertRaises(UpdateFailed):
             await self.coordinator(api)._async_update_data()
 
     async def test_detail_auth_failure_is_not_silently_basic_info(self):
-        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from homeassistant.helpers.update_coordinator import UpdateFailed
 
         api = SimpleNamespace(
             is_authenticated=True,
+            token_seconds_left=None,
+            access_token="token",
+            async_renew_token=AsyncMock(return_value=False),
+            async_mint_token=AsyncMock(return_value=False),
             async_get_devices=AsyncMock(return_value=[{"deviceId": "d1"}]),
             async_get_device_status=AsyncMock(side_effect=AOSmithAuthError("secret")),
         )
-        with self.assertRaises(ConfigEntryAuthFailed):
+        with self.assertRaises(UpdateFailed):
             await self.coordinator(api)._async_update_data()
 
     async def test_one_status_failure_does_not_discard_other_devices(self):
         api = SimpleNamespace(
             is_authenticated=True,
+            token_seconds_left=None,
+            access_token="token",
+            async_renew_token=AsyncMock(return_value=False),
+            async_mint_token=AsyncMock(return_value=False),
             async_get_devices=AsyncMock(return_value=[
                 {"deviceId": "d1", "deviceCategory": "19"},
                 {"deviceId": "d2", "deviceCategory": "19"},
@@ -239,7 +282,7 @@ class RuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(data["d2"]["_status_available"])
 
     async def test_command_auth_failure_has_no_optimistic_update(self):
-        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from homeassistant.exceptions import HomeAssistantError
 
         api = SimpleNamespace(
             async_get_device_status=AsyncMock(return_value={"productModel": "JSQ31-VJS", "devState": 1,
@@ -247,12 +290,66 @@ class RuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
             async_send_command=AsyncMock(side_effect=AOSmithAuthError("secret")),
         )
         coordinator = self.coordinator(api)
-        reauth = Mock()
-        coordinator.config_entry = SimpleNamespace(async_start_reauth_if_available=reauth)
-        with self.assertRaises(ConfigEntryAuthFailed):
+        with self.assertRaises(HomeAssistantError):
             await coordinator.async_command("d1", "WaterTempSet", {"waterTemp": "40"}, {"waterTemp": 40})
         coordinator.async_set_updated_data.assert_not_awaited()
-        reauth.assert_called_once_with(coordinator.hass)
+
+    async def test_empty_auth_record_recovers_after_token_sync(self):
+        api = SimpleNamespace(
+            access_token="old-token",
+            token_seconds_left=60,
+            async_get_device_status=AsyncMock(side_effect=[
+                {"devState": 0, "productModel": ""},
+                {"devState": 1, "productModel": "JSQ31-VJS"},
+            ]),
+            async_mint_token=AsyncMock(return_value=False),
+        )
+
+        async def renew():
+            api.access_token = "new-token"
+            return True
+
+        api.async_renew_token = AsyncMock(side_effect=renew)
+        status = await self.coordinator(api)._async_get_recoverable_status("d1")
+        self.assertEqual(status["productModel"], "JSQ31-VJS")
+        self.assertEqual(api.async_get_device_status.await_count, 2)
+
+    async def test_token_sync_never_gives_up_after_repeated_failures(self):
+        api = SimpleNamespace(
+            access_token="old-token",
+            token_seconds_left=60,
+            async_mint_token=AsyncMock(return_value=False),
+        )
+        attempts = 0
+
+        async def renew():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 5:
+                api.access_token = "recovered-token"
+                return True
+            return False
+
+        api.async_renew_token = AsyncMock(side_effect=renew)
+        coordinator = self.coordinator(api)
+        with patch("custom_components.ailink_aosmith.time.monotonic", side_effect=[301, 602, 903, 1204, 1505]):
+            results = [await coordinator._async_sync_token(force=True) for _ in range(5)]
+        self.assertEqual(results, [False, False, False, False, True])
+        self.assertEqual(attempts, 5)
+
+    async def test_first_failure_sync_is_not_delayed_by_system_uptime(self):
+        api = SimpleNamespace(
+            access_token="old-token",
+            token_seconds_left=60,
+            async_renew_token=AsyncMock(return_value=False),
+            async_mint_token=AsyncMock(return_value=False),
+        )
+        coordinator = self.coordinator(api)
+
+        with patch("custom_components.ailink_aosmith.time.monotonic", return_value=1):
+            await coordinator._async_sync_token(force=True)
+
+        api.async_renew_token.assert_awaited_once()
 
     async def test_command_business_failure_is_safe(self):
         from homeassistant.exceptions import HomeAssistantError

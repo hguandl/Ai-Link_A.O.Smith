@@ -2,7 +2,7 @@
 
 用于 AI 家智控燃气热水器的 Home Assistant 自定义集成。通过史密斯云端控制设备，支持 HomeKit Bridge。
 
-## v1.3.0 功能
+## v1.4.0 功能
 
 | 功能 | Home Assistant | Apple 家庭（通过 HomeKit Bridge） |
 |---|---|---|
@@ -43,7 +43,10 @@ HomeKit 时长适配器借用风扇的百分比控件，名称明确标注“1%=
 ## 认证与协议限制
 
 - 请求体按紧凑 UTF-8 JSON 序列化后，使用同一组字节计算 `md5data` 与签名；认证失败会进入 Home Assistant 原生重新认证流程。
-- 重新认证仅替换令牌，验证成功前不会修改已保存凭证；集成不实现未经验证的自动令牌刷新。
+- 云端在响应 `Authorization` 头中返回轮换后的令牌，集成会立即采用并安全写回配置。
+- JWT 的 `exp` 仅用于安排同步时间，不直接判定令牌失效。临近 `exp` 时使用 `getLastToken` 同步账号最新令牌，过期后还会尝试只读端点获取云端重新签发的令牌。
+- 云端可能以 HTTP 200 加空设备记录表示令牌不再被接受。集成会先同步令牌并重试；失败后保持定时轮询，不会让配置项永久停止，从而能在官方 App 更新令牌后自行恢复。
+- 原生“重新认证/重新配置”仍可手动替换令牌；新令牌验证成功前不会修改已有凭据。物理控制命令不会因鉴权错误被自动重放。
 - 回归测试使用合成响应，不连接真实云端、不包含真实账号或设备数据；特定型号和设备仍需单独的用户授权验证。
 - 签名研究致谢 Doker9527 与 xiaoyawei 的公开研究。
 
@@ -51,7 +54,7 @@ HomeKit 时长适配器借用风扇的百分比控件，名称明确标注“1%=
 
 在 HACS 自定义仓库中添加 `https://github.com/mopocv/Ai-Link_A.O.Smith`，类别选 Integration，安装后重启 Home Assistant。也可以将 `custom_components/ailink_aosmith` 复制到 HA 的 `custom_components` 目录后重启。
 
-在“设置 → 设备与服务 → 添加集成”搜索 Ai-Link A.O. Smith，填写从 AI 家智控抓包获取的 `access_token`、`user_id`、`family_id`，可选 Cookie 与手机号。令牌可带或不带 `Bearer ` 前缀。令牌过期后需更新认证信息。
+在“设置 → 设备与服务 → 添加集成”搜索 Ai-Link A.O. Smith，填写从 AI 家智控抓包获取的 `access_token`、`user_id`、`family_id`，可选 Cookie 与手机号。令牌可带或不带 `Bearer ` 前缀。首次抓取后，集成会自动同步云端轮换的令牌；若云端无法从旧令牌恢复，仍可在集成设置中手动替换。
 
 默认每 60 秒轮询，可在集成选项中调整。控制操作会另外主动查询状态确认。
 
@@ -82,5 +85,11 @@ JSQ31-VJS 新增独立的标准燃气累计传感器：按官方能耗页面的 
 ## 验证
 
 `python -m unittest discover -s tests -v`：协议范围、非法输入、旧快照优先级和热水使用限制。安装 Home Assistant 后还会运行控制确认、错误传播、温控状态及三档映射测试；没有 HA 时这些运行时测试标记为跳过。
+
+## 致谢
+
+特别感谢 [@RainySat](https://github.com/RainySat) 在 [issue #11 的详细研究](https://github.com/mopocv/Ai-Link_A.O.Smith/issues/11#issuecomment-5691595668)中验证令牌轮换、`getLastToken`、响应头更新及 HTTP 200 空记录的失效表现，并提供同云平台的[参考实现](https://github.com/RainySat/ha-ailink-electric-water-heater)。这些结论构成 v1.4.0 自动令牌同步与自恢复机制的基础。
+
+感谢 [@xiaoyaner0201](https://github.com/xiaoyaner0201) 贡献请求签名、错误分类和 Home Assistant 原生重新认证流程。
 
 第三方项目，与 A.O. Smith 官方无隶属关系。许可证见 LICENSE。
