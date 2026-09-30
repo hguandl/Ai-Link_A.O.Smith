@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
-from .protocol import extract_output_data, temperature_command, numeric
+from .protocol import extract_output_data, temperature_command, numeric, is_e10, boiler_command
 
 from .const import (
     CONF_UPDATE_INTERVAL,
@@ -138,13 +138,25 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
                 output = extract_output_data(status)
                 if not output:
                     raise HomeAssistantError("Device status is unavailable")
-                if identifier == "temperature":
+                device_data = {**self.data.get(device_id, {}), **status}
+                boiler = is_e10(device_data)
+                if boiler:
+                    try:
+                        identifier, inputs, expected = boiler_command(device_data, identifier, inputs)
+                    except (ValueError, KeyError, TypeError) as err:
+                        raise HomeAssistantError(str(err)) from None
+                elif identifier.startswith("boiler_"):
+                    raise HomeAssistantError("E10 device identity is unavailable")
+                elif identifier == "temperature":
                     value = inputs["temperature"]
                     identifier, inputs = temperature_command(output, value)
                 model = status.get("productModel") or output.get("deviceModel")
                 if not model:
                     raise HomeAssistantError("Device model is unavailable")
-                await self.api.async_send_command(device_id, identifier, inputs, device_type=model)
+                if boiler:
+                    await self.api.async_send_command(device_id, identifier, inputs, device_type=model, product_type="24")
+                else:
+                    await self.api.async_send_command(device_id, identifier, inputs, device_type=model)
                 for delay in (1, 2, 3, 4):
                     await asyncio.sleep(delay)
                     status = await self.api.async_get_device_status(device_id)

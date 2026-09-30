@@ -1,0 +1,37 @@
+{
+  "deviceId": "test-e10",
+  "deviceCategory": "24",
+  "productMajorClassCode": "24",
+  "productModel": "LL1GBQ24-E10",
+  "productName": "壁挂炉",
+  "devState": 1,
+  "isTriplesupply": 0,
+  "appDeviceStatusInfoEntity": {
+    "statusInfo": {
+      "events": [{
+        "identifier": "post",
+        "outputData": {
+          "deviceModel": "LL1GBQ24-E10",
+          "powerStatus": "1",
+          "warmStatus": "0",
+          "waterTEMP": "43",
+          "warmTemp": "35",
+          "waterOutTEMP": "38",
+          "waterInTEMP": "32",
+          "warmOutTEMP": "41",
+          "warmInTEMP": "40",
+          "waterTempSetMin": 35,
+          "waterTempSetMax": 60,
+          "warmTempSetMin": 30,
+          "warmTempSetMax": 85,
+          "AES_FuncOn": "0",
+          "wholeHouseWorkModel": "0",
+          "livingWaterMode": "0",
+          "hasAD_Fire": "0",
+          "waterFlow": "0.00"
+        }
+      }],
+      "profile": {"deviceType": "LL1GBQ24-E10", "productType": "24"}
+    }
+  }
+}

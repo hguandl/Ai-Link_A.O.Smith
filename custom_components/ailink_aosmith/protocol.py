@@ -1,4 +1,4 @@
-"""Validated gas-water-heater protocol, based on the official GasWater UI."""
+"""Protocols checked against the official GasWater and wallHung UIs."""
 import json
 import math
 
@@ -70,3 +70,64 @@ def temperature_command(output: dict, value: float) -> tuple[str, dict]:
     if flag(output, "halfTempSetFlag"):
         return "SetHalfTempValue", {"waterTemp": str(int(value * 2))}
     return "WaterTempSet", {"waterTemp": str(int(value))}
+
+
+def is_e10(device_data: dict) -> bool:
+    """Only enable the boiler protocol for the model whose status was captured."""
+    category = device_data.get("deviceCategory") or device_data.get("productMajorClassCode")
+    model = device_data.get("productModel") or extract_output_data(device_data).get("deviceModel")
+    return str(category) == "24" and model == "LL1GBQ24-E10"
+
+
+def boiler_temperature_limits(output: dict, heating: bool = False) -> tuple[int, int]:
+    prefix = "warm" if heating else "water"
+    minimum = numeric(output, f"{prefix}TempSetMin")
+    maximum = numeric(output, f"{prefix}TempSetMax")
+    lower, upper = (30, 85) if heating else (35, 60)
+    if (minimum is None or maximum is None or not minimum.is_integer()
+            or not maximum.is_integer() or not lower <= minimum <= maximum <= upper):
+        raise ValueError("Boiler temperature limits are unavailable or unsupported")
+    return int(minimum), int(maximum)
+
+
+def boiler_command(device_data: dict, identifier: str, inputs: dict) -> tuple[str, dict, dict]:
+    """Translate E10 actions using fresh status; never reuse gas-heater inputs."""
+    if not is_e10(device_data) or str(device_data.get("devState")) != "1":
+        raise ValueError("E10 is unavailable")
+    output = extract_output_data(device_data)
+    power = flag(output, "powerStatus")
+    if power is None:
+        raise ValueError("Boiler power state is unavailable")
+    # The official page delegates combined systems to their system controller.
+    standalone = flag(output, "wholeHouseWorkModel") is True or str(device_data.get("isTriplesupply")) == "0"
+    if not standalone:
+        raise ValueError("Combined-system boiler control is not supported")
+    if identifier == "boiler_power":
+        value = validate_integer(inputs["value"], 0, 1)
+        return "SetDeviceOnOff", {"CommandValue": str(value)}, {"powerStatus": value}
+    if not power:
+        raise ValueError("Turn on the boiler power switch first")
+    if identifier == "boiler_heating":
+        value = validate_integer(inputs["value"], 0, 1)
+        return "SetHeatingOnOff", {"CommandValue": str(value)}, {"warmStatus": value}
+    if identifier not in ("boiler_water_temperature", "boiler_heating_temperature"):
+        raise ValueError("Unsupported E10 command")
+    heating = identifier == "boiler_heating_temperature"
+    minimum, maximum = boiler_temperature_limits(output, heating)
+    value = validate_integer(inputs["temperature"], minimum, maximum)
+    key = "warmTemp" if heating else "waterTEMP"
+    current = numeric(output, key)
+    if current is None:
+        raise ValueError("Current target temperature is unavailable")
+    if heating:
+        if flag(output, "AES_FuncOn") is not False:
+            raise ValueError("Manual heating temperature is unavailable in SHC mode")
+    else:
+        if current == 15:
+            raise ValueError("Domestic hot water is disabled")
+        if value > current and value > 50:
+            in_use = flag(output, "livingWaterMode")
+            flame = flag(output, "hasAD_Fire")
+            if in_use is None or flame is None or (in_use and flame):
+                raise ValueError("Cannot raise water temperature above 50 °C while hot water is in use")
+    return "SetTemperature", {"CommandValue": str(value), "CommandType": "1" if heating else "0"}, {key: value}
