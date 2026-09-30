@@ -1,6 +1,29 @@
 # Ai-Link A.O. Smith 热水器集成
 
-用于 AI 家智控燃气热水器的 Home Assistant 自定义集成。通过史密斯云端控制设备，支持 HomeKit Bridge。
+用于 AI 家智控燃气热水器及 LL1GBQ24-E10 壁挂炉的 Home Assistant 自定义集成。通过史密斯云端控制设备，支持 HomeKit Bridge。
+
+## LL1GBQ24-E10 壁挂炉
+
+支持类别 `24`、型号 `LL1GBQ24-E10`，与原有类别 `19` 的燃气热水器分别解析和控制。配置仍使用 `access_token`、`user_id`、`family_id`，Cookie 可选。其他壁挂炉型号尚未开放。
+
+| 实体 | 作用 |
+|---|---|
+| 生活热水 `water_heater` | 设置生活热水温度，范围取设备上报；当前 E10 为 35–60°C，整度调节 |
+| 采暖供水 `climate` | 采暖开关与供水设定温度；当前 E10 为 30–85°C，整度调节 |
+| 总电源 `switch` | 整台壁挂炉开关，同时影响生活热水和采暖 |
+| 温度、流量 `sensor` | 生活热水设定/进水/出水温度、采暖设定/出水/回水温度及生活热水流量 |
+
+采暖实体的当前温度是**采暖出水温度**，不是室温；关闭采暖实体只关闭采暖。生活热水实体只提供调温，整机启停使用独立总电源开关。整机关闭时，先打开总电源再操作采暖或调温。
+
+温度设定依据新读取的设备状态校验。SHC 模式禁止手动调节采暖温度，正在使用生活热水时禁止把水温继续调高到 50°C 以上；三联供等组合系统暂不提供写入。控制命令使用类别 `24`、`CommandValue`，发送后需状态回读匹配才能确认成功，不会自动重发物理命令。
+
+E10 不创建普通燃气热水器的增压和零冷水时长控件。速热洗、定时、房间温控及能耗统计仍使用官方 App；未确认火焰属于哪个回路时，不推断采暖正在燃烧。
+
+协议依据：2026-09-30 的脱敏 E10 状态样例及官方 [壁挂炉页面脚本](https://ailink-appservice-h5-prd.hotwater.com.cn/dist/js/wallHung.5ab6256c.js)、[系统参数页面脚本](https://ailink-appservice-h5-prd.hotwater.com.cn/dist/js/4913.a6f8bc72.js)。生活热水使用 `waterTEMP` / `waterOutTEMP`，采暖使用 `warmTemp` / `warmOutTEMP`，分别对应 `SetTemperature` 的 `CommandType=0` / `1`。
+
+已在 Home Assistant 2026.9.4 / Python 3.14 下通过自动化回归，并使用真实账号完成只读认证、发现和状态读取。**尚未向真实壁挂炉发送开关或调温指令，也未在用户的 Home Assistant 实例部署验收**；控制报文已按官方源码核对并使用模拟响应测试。仓库只包含合成设备标识和脱敏状态值，不包含真实认证信息或抓包文件。
+
+更新时将本仓库的 `custom_components/ailink_aosmith` 覆盖到 Home Assistant 的同名目录并重启；随后添加集成或重新加载现有配置。原有燃气热水器实体标识保持不变。
 
 ## v1.4.0 功能
 
@@ -84,7 +107,7 @@ JSQ31-VJS 新增独立的标准燃气累计传感器：按官方能耗页面的 
 
 ## 验证
 
-`python -m unittest discover -s tests -v`：协议范围、非法输入、旧快照优先级和热水使用限制。安装 Home Assistant 后还会运行控制确认、错误传播、温控状态及三档映射测试；没有 HA 时这些运行时测试标记为跳过。
+安装 Home Assistant 测试依赖后运行 `python -m unittest discover -s tests -v`，覆盖签名认证、协议范围、非法输入、旧快照优先级、状态回读、原燃气热水器及 E10 分路控制。仅检查独立协议函数时可运行 `python -m unittest discover -s tests -p test_protocol.py -v`，无需 Home Assistant。
 
 ## 致谢
 

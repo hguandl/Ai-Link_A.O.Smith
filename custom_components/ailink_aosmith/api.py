@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import aiohttp
 
 from .const import API_BASE_URL, DEVICE_CATEGORY_WATER_HEATER
+from .protocol import is_e10
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class AOSmithAPI:
             raise AOSmithAPIError("Authentication failed") from None
 
     async def async_get_devices(self) -> List[Dict[str, Any]]:
-        """Get the user's water-heater devices."""
+        """Get supported gas water heaters and E10 boilers."""
         payload = {
             "encode": self._generate_encode(),
             "homePageVersion": "3",
@@ -113,7 +114,7 @@ class AOSmithAPI:
         return [
             device
             for device in devices
-            if str(device.get("deviceCategory")) == DEVICE_CATEGORY_WATER_HEATER
+            if str(device.get("deviceCategory")) == DEVICE_CATEGORY_WATER_HEATER or is_e10(device)
         ]
 
     async def async_get_device_status(self, device_id: str) -> Dict[str, Any]:
@@ -140,6 +141,7 @@ class AOSmithAPI:
         input_data: Dict[str, Any] | None = None,
         *,
         device_type: str = "JSQ31-VJS",
+        product_type: str = DEVICE_CATEGORY_WATER_HEATER,
     ) -> Dict[str, Any]:
         """Send one control command; writes are deliberately not retried."""
         if input_data is None:
@@ -154,7 +156,7 @@ class AOSmithAPI:
                 {
                     "profile": {
                         "deviceId": device_id,
-                        "productType": "19",
+                        "productType": product_type,
                         "deviceType": device_type,
                     },
                     "service": {
@@ -165,6 +167,8 @@ class AOSmithAPI:
                 ensure_ascii=False,
             ),
         }
+        if product_type == "24":
+            payload["deviceId"] = device_id
         # A physical command is never replayed automatically: a response can be
         # lost after the cloud has already accepted the write.
         data = await self._post_json(

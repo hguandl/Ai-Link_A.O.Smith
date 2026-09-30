@@ -2,7 +2,7 @@
 from homeassistant.components.switch import SwitchEntity
 from .const import DOMAIN, DEVICE_CATEGORY_WATER_HEATER
 from .entity import AOSmithEntity
-from .protocol import flag, numeric, DURATION_PRESETS
+from .protocol import flag, numeric, DURATION_PRESETS, is_e10
 
 # key, display name, command, input field, reported field
 MODES = (
@@ -19,6 +19,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         if str(data.get("deviceCategory")) == DEVICE_CATEGORY_WATER_HEATER:
             entities.extend(AOSmithModeSwitch(coordinator, key, mode) for mode in MODES)
             entities.extend(AOSmithDurationPreset(coordinator, key, minutes) for minutes in DURATION_PRESETS)
+        elif is_e10(data):
+            entities.append(AOSmithBoilerPower(coordinator, key))
     async_add_entities(entities)
 
 
@@ -62,3 +64,23 @@ class AOSmithDurationPreset(AOSmithEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs):
         # A duration cannot be unset. Re-publish the actual selected preset.
         self.async_write_ha_state()
+
+
+class AOSmithBoilerPower(AOSmithEntity, SwitchEntity):
+    """Whole-boiler power, separate from the heating-water circuit."""
+    _attr_icon = "mdi:power"
+
+    def __init__(self, coordinator, device_id):
+        super().__init__(coordinator, device_id)
+        self._attr_name = f"{self.device_data.get('productName', 'Boiler')} 总电源"
+        self._attr_unique_id = f"{device_id}_boiler_power"
+
+    @property
+    def is_on(self):
+        return flag(self._get_output_data(), "powerStatus")
+
+    async def async_turn_on(self, **kwargs):
+        await self.coordinator.async_command(self.device_id, "boiler_power", {"value": 1}, {"powerStatus": 1})
+
+    async def async_turn_off(self, **kwargs):
+        await self.coordinator.async_command(self.device_id, "boiler_power", {"value": 0}, {"powerStatus": 0})

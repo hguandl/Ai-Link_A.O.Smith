@@ -52,6 +52,49 @@
     }
   },
   "entity": {
+    "boiler_sensor": {
+      "waterTEMP": {
+        "name": "生活热水设定温度",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "waterOutTEMP": {
+        "name": "生活热水出水温度",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "waterInTEMP": {
+        "name": "生活热水进水温度",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "warmTemp": {
+        "name": "采暖供水设定温度",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "warmOutTEMP": {
+        "name": "采暖出水温度",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "warmInTEMP": {
+        "name": "采暖回水温度",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "waterFlow": {
+        "name": "生活热水流量",
+        "unit": "L/min",
+        "icon": "mdi:water"
+      }
+    },
     "sensor": {
       "waterTemp": {
         "name": "设定温度",

@@ -52,6 +52,49 @@
     }
   },
   "entity": {
+    "boiler_sensor": {
+      "waterTEMP": {
+        "name": "Domestic hot water target",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "waterOutTEMP": {
+        "name": "Domestic hot water outlet",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "waterInTEMP": {
+        "name": "Domestic hot water inlet",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "warmTemp": {
+        "name": "Heating water target",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "warmOutTEMP": {
+        "name": "Heating water outlet",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "warmInTEMP": {
+        "name": "Heating water return",
+        "group": "temperature",
+        "unit": "°C",
+        "icon": "mdi:thermometer"
+      },
+      "waterFlow": {
+        "name": "Domestic hot water flow",
+        "unit": "L/min",
+        "icon": "mdi:water"
+      }
+    },
     "sensor": {
       "waterTemp": {
         "name": "Target temperature",

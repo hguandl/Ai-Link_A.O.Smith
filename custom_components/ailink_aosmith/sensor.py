@@ -16,7 +16,7 @@ from .const import (
 )
 from .entity import AOSmithEntity, extract_output_data
 from .translations import async_load_translation
-from .protocol import numeric
+from .protocol import numeric, is_e10
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,9 +41,10 @@ async def async_setup_entry(
     cfg = await async_load_translation(hass, config_entry)
 
     entity_sensors = cfg.get("entity", {}).get("sensor", {}) or {}
+    boiler_sensors = cfg.get("entity", {}).get("boiler_sensor", {}) or {}
     sensor_mapping: Dict[str, Dict[str, Any]] = {}
 
-    for key, info in entity_sensors.items():
+    for key, info in {**boiler_sensors, **entity_sensors}.items():
         if isinstance(info, dict):
             name = info.get("name") or key
             group = info.get("group", "default")
@@ -74,11 +75,15 @@ async def async_setup_entry(
     )
 
     for device_id, device_data in coordinator.data.items():
-        if str(device_data.get("deviceCategory", "")) != DEVICE_CATEGORY_WATER_HEATER:
+        boiler = is_e10(device_data)
+        if str(device_data.get("deviceCategory", "")) != DEVICE_CATEGORY_WATER_HEATER and not boiler:
             continue
         # Create mapped sensors
-        for sensor_key in sensor_mapping.keys():
+        output = extract_output_data(device_data)
+        for sensor_key in boiler_sensors if boiler else entity_sensors:
             if sensor_key in MERGED_SENSOR_KEYS:
+                continue
+            if boiler and sensor_key not in output:
                 continue
             entities.append(AOSmithSensor(coordinator, device_id, sensor_key, sensor_mapping))
 
@@ -94,7 +99,7 @@ async def async_setup_entry(
             output = extract_output_data(device_data)
             if isinstance(output, dict):
                 for key in output.keys():
-                    if key not in sensor_mapping:
+                    if key not in (boiler_sensors if boiler else entity_sensors):
                         entities.append(AOSmithRawSensor(coordinator, device_id, key))
 
     _LOGGER.info("Setting up %d sensors for %s", len(entities), config_entry.entry_id)
