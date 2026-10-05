@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import aiohttp
 
 from .const import API_BASE_URL, DEVICE_CATEGORY_WATER_HEATER
-from .protocol import is_e10
+from .protocol import is_e10, is_cte_ht3
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class AOSmithAPI:
             raise AOSmithAPIError("Authentication failed") from None
 
     async def async_get_devices(self) -> List[Dict[str, Any]]:
-        """Get supported gas water heaters and E10 boilers."""
+        """Get supported gas heaters, E10 boilers and CTE-HT3 devices."""
         payload = {
             "encode": self._generate_encode(),
             "homePageVersion": "3",
@@ -114,7 +114,7 @@ class AOSmithAPI:
         return [
             device
             for device in devices
-            if str(device.get("deviceCategory")) == DEVICE_CATEGORY_WATER_HEATER or is_e10(device)
+            if str(device.get("deviceCategory")) == DEVICE_CATEGORY_WATER_HEATER or is_e10(device) or is_cte_ht3(device)
         ]
 
     async def async_get_device_status(self, device_id: str) -> Dict[str, Any]:

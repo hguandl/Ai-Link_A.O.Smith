@@ -2,7 +2,7 @@
 from homeassistant.components.switch import SwitchEntity
 from .const import DOMAIN, DEVICE_CATEGORY_WATER_HEATER
 from .entity import AOSmithEntity
-from .protocol import flag, numeric, DURATION_PRESETS, is_e10
+from .protocol import flag, numeric, DURATION_PRESETS, is_e10, is_cte_ht3
 
 # key, display name, command, input field, reported field
 MODES = (
@@ -21,6 +21,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
             entities.extend(AOSmithDurationPreset(coordinator, key, minutes) for minutes in DURATION_PRESETS)
         elif is_e10(data):
             entities.append(AOSmithBoilerPower(coordinator, key))
+        elif is_cte_ht3(data):
+            entities.extend(AOSmithElectricSwitch(coordinator, key, mode) for mode in ELECTRIC_MODES)
     async_add_entities(entities)
 
 
@@ -84,3 +86,39 @@ class AOSmithBoilerPower(AOSmithEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs):
         await self.coordinator.async_command(self.device_id, "boiler_power", {"value": 0}, {"powerStatus": 0})
+
+
+# Translation/command key, reported field, icon
+ELECTRIC_MODES = (
+    ("electric_instant_heating", "instantHeating", "mdi:water-boiler"),
+    ("electric_disinfection", "disinfection", "mdi:bacteria-outline"),
+    ("electric_max_capacity", "increaseCapacity", "mdi:water-plus"),
+    ("electric_reservation", "preheatStatus3", "mdi:timer-outline"),
+    ("electric_heating_mode", "workModel", "mdi:water-boiler"),
+)
+
+
+class AOSmithElectricSwitch(AOSmithEntity, SwitchEntity):
+    """Optional electric-heater functions verified against App traffic."""
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, device_id, mode):
+        super().__init__(coordinator, device_id)
+        key, self._reported, self._attr_icon = mode
+        self._command = key
+        self._attr_translation_key = key
+        self._attr_name = self.translation.get("entity", {}).get("switch", {}).get(key, {}).get("name", key)
+        self._attr_unique_id = f"{device_id}_{key}"
+
+    @property
+    def is_on(self):
+        if self._reported == "workModel":
+            value = numeric(self._get_output_data(), self._reported)
+            return value == 2 if value in (1, 2) else None
+        return flag(self._get_output_data(), self._reported)
+
+    async def async_turn_on(self, **kwargs):
+        await self.coordinator.async_command(self.device_id, self._command, {"value": 1}, {})
+
+    async def async_turn_off(self, **kwargs):
+        await self.coordinator.async_command(self.device_id, self._command, {"value": 0}, {})

@@ -394,6 +394,9 @@
         "gas": "Gas Heating",
         "cruise": "Zero Cold Water",
         "half_pipe": "Eco Zero Cold Water"
+      },
+      "electric_temperature": {
+        "name": "Water temperature"
       }
     },
     "switch": {
@@ -408,6 +411,21 @@
       "half_pipe": {
         "name": "Eco Zero Cold Water",
         "icon": "mdi:pipe"
+      },
+      "electric_instant_heating": {
+        "name": "Instant heating"
+      },
+      "electric_disinfection": {
+        "name": "Disinfection"
+      },
+      "electric_max_capacity": {
+        "name": "Max capacity"
+      },
+      "electric_reservation": {
+        "name": "Bathing reservation"
+      },
+      "electric_heating_mode": {
+        "name": "Dual-tank heating"
       }
     },
     "number": {
@@ -415,6 +433,29 @@
         "name": "One-Key Zero Cold Water Runtime",
         "icon": "mdi:timer-cog",
         "unit": "minutes"
+      },
+      "electric_reservation_hours": {
+        "name": "Bathing reservation delay"
+      }
+    },
+    "electric_sensor": {
+      "electric_status": {
+        "name": "Device status",
+        "icon": "mdi:water-boiler",
+        "value_map": {
+          "off": "Off",
+          "heating": "Heating",
+          "scheduled": "Scheduled",
+          "keeping_warm": "Keeping warm"
+        }
+      },
+      "faultReportEvent": {
+        "name": "Fault information",
+        "icon": "mdi:alert-circle-outline"
+      },
+      "warnReportEvent": {
+        "name": "Warning information",
+        "icon": "mdi:information-outline"
       }
     }
   }

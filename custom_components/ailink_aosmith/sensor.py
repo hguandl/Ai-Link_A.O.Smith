@@ -16,7 +16,7 @@ from .const import (
 )
 from .entity import AOSmithEntity, extract_output_data
 from .translations import async_load_translation
-from .protocol import numeric, is_e10
+from .protocol import numeric, flag, is_e10, is_cte_ht3, extract_event_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +75,12 @@ async def async_setup_entry(
     )
 
     for device_id, device_data in coordinator.data.items():
+        if is_cte_ht3(device_data):
+            mapping = cfg.get("entity", {}).get("electric_sensor", {})
+            entities.append(AOSmithElectricStatus(coordinator, device_id, "electric_status", mapping))
+            for event in ("faultReportEvent", "warnReportEvent"):
+                entities.append(AOSmithElectricReport(coordinator, device_id, event, mapping))
+            continue
         boiler = is_e10(device_data)
         if str(device_data.get("deviceCategory", "")) != DEVICE_CATEGORY_WATER_HEATER and not boiler:
             continue
@@ -209,3 +215,44 @@ class AOSmithRawSensor(AOSmithEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         return {"source_key": self._sensor_key}
+
+
+class AOSmithElectricStatus(AOSmithSensor):
+    """App status, prioritizing active heating over a reservation."""
+
+    @property
+    def native_value(self):
+        output = self._get_output_data()
+        power = flag(output, "powerStatus")
+        if power is None:
+            return None
+        if not power:
+            state = "off"
+        elif flag(output, "heatStatus"):
+            state = "heating"
+        elif flag(output, "preheatStatus3"):
+            state = "scheduled"
+        else:
+            state = "keeping_warm"
+        return self._value_map.get(state)
+
+
+class AOSmithElectricReport(AOSmithSensor):
+    """Display reported fault or maintenance messages without guessing codes."""
+
+    def _reports(self):
+        output = extract_event_data(self.device_data, self._sensor_key)
+        return [item for item in output if isinstance(item, dict)] if isinstance(output, list) else []
+
+    @property
+    def native_value(self):
+        messages = [str(item["errorContent"]) for item in self._reports()
+                    if item.get("errorContent")]
+        # HA states are limited to 255 characters; attributes retain each report.
+        return "; ".join(messages)[:255] if messages else None
+
+    @property
+    def extra_state_attributes(self):
+        reports = [{key: item.get(key) for key in ("errorCode", "errorContent")}
+                   for item in self._reports()]
+        return {"source_event": self._sensor_key, "reports": reports}

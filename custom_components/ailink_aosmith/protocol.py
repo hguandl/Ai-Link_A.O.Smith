@@ -5,24 +5,28 @@ import math
 DURATION_PRESETS = (1, 5, 10, 15, 30, 60, 99)
 
 
-def extract_output_data(device_data: dict) -> dict:
-    """Prefer the detailed status over the older homepage snapshot."""
+def extract_event_data(device_data: dict, identifier: str):
+    """Read one event from the detailed status, falling back to the homepage."""
     nested = device_data.get("appDeviceStatusInfoEntity")
     raw = nested.get("statusInfo") if isinstance(nested, dict) else None
     raw = raw or device_data.get("statusInfo")
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
-        return {}
+        return None
     if not isinstance(parsed, dict):
-        return {}
+        return None
     events = parsed.get("events", [])
     if isinstance(events, list):
         for event in events:
-            if isinstance(event, dict) and event.get("identifier") == "post":
-                output = event.get("outputData")
-                return output if isinstance(output, dict) else {}
-    output = parsed.get("outputData")
+            if isinstance(event, dict) and event.get("identifier") == identifier:
+                return event.get("outputData")
+    return parsed.get("outputData") if identifier == "post" else None
+
+
+def extract_output_data(device_data: dict) -> dict:
+    """Read the property report as a dictionary."""
+    output = extract_event_data(device_data, "post")
     return output if isinstance(output, dict) else {}
 
 
@@ -131,3 +135,64 @@ def boiler_command(device_data: dict, identifier: str, inputs: dict) -> tuple[st
             if in_use is None or flame is None or (in_use and flame):
                 raise ValueError("Cannot raise water temperature above 50 °C while hot water is in use")
     return "SetTemperature", {"CommandValue": str(value), "CommandType": "1" if heating else "0"}, {key: value}
+
+
+def is_cte_ht3(device_data: dict) -> bool:
+    """Recognize only the captured category-17 model, including profile-only records."""
+    nested = device_data.get("appDeviceStatusInfoEntity")
+    raw = nested.get("statusInfo") if isinstance(nested, dict) else None
+    raw = raw or device_data.get("statusInfo")
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        parsed = None
+    profile = parsed.get("profile") if isinstance(parsed, dict) else None
+    profile = profile if isinstance(profile, dict) else {}
+    category = (device_data.get("deviceCategory")
+                or device_data.get("productMajorClassCode") or profile.get("productType"))
+    model = device_data.get("productModel") or profile.get("deviceType") or profile.get("deviceModel")
+    return str(category) == "17" and model == "CTE-HT3"
+
+
+def electric_command(device_data, identifier, inputs):
+    """Translate verified CTE-HT3 actions and their confirmation fields."""
+    if not is_cte_ht3(device_data) or str(device_data.get("devState", "1")) == "0":
+        raise ValueError("CTE-HT3 is unavailable")
+    if identifier == "electric_power":
+        value = validate_integer(inputs["value"], 0, 1)
+        command, expected = {"powerStatus": str(value)}, {"powerStatus": value}
+    elif identifier == "electric_temperature":
+        value = validate_integer(inputs["temperature"], 35, 75)
+        command, expected = {"Temperature": str(value)}, {"heatingTemp": value}
+    elif identifier in ("electric_instant_heating", "electric_disinfection", "electric_max_capacity"):
+        field, reported = {
+            "electric_instant_heating": ("instantHeating", "instantHeating"),
+            "electric_disinfection": ("Disinfection", "disinfection"),
+            "electric_max_capacity": ("Max", "increaseCapacity"),
+        }[identifier]
+        value = validate_integer(inputs["value"], 0, 1)
+        command, expected = {field: str(value)}, {reported: value}
+    elif identifier == "electric_heating_mode":
+        value = validate_integer(inputs["value"], 0, 1) + 1
+        command, expected = {"HeaterMode": str(value)}, {"workModel": value}
+    elif identifier in ("electric_reservation", "electric_reservation_hours"):
+        output = extract_output_data(device_data)
+        if identifier == "electric_reservation":
+            enabled = validate_integer(inputs["value"], 0, 1)
+            current_hours = numeric(output, "preheatTime")
+            if current_hours is None:
+                raise ValueError("Reservation delay is unavailable")
+            hours = validate_integer(current_hours, 0, 24)
+        else:
+            enabled = flag(output, "preheatStatus3")
+            if enabled is None:
+                raise ValueError("Reservation state is unavailable")
+            enabled = int(enabled)
+            hours = validate_integer(inputs["value"], 0, 24)
+        command = {"CountdownOne": {"OnOff": str(enabled), "Duration": str(hours)}}
+        expected = {"preheatStatus3": enabled}
+        if identifier == "electric_reservation_hours":
+            expected["preheatTime"] = hours or 24
+    else:
+        raise ValueError("Unsupported CTE-HT3 command")
+    return "SetElectricWaterHeater", command, expected

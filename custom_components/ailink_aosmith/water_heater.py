@@ -1,10 +1,12 @@
-"""Native water heater entity, sharing validated controls with the thermostat."""
-from homeassistant.components.water_heater import WaterHeaterEntity, WaterHeaterEntityFeature, STATE_GAS
+"""Native water heater entities with validated cloud controls."""
+import math
+
+from homeassistant.components.water_heater import WaterHeaterEntity, WaterHeaterEntityFeature, STATE_GAS, STATE_ELECTRIC
 from homeassistant.const import ATTR_TEMPERATURE, STATE_OFF, UnitOfTemperature
 from homeassistant.exceptions import HomeAssistantError
 from .const import DOMAIN, DEVICE_CATEGORY_WATER_HEATER
 from .entity import AOSmithEntity
-from .protocol import numeric, flag, temperature_limits, is_e10, boiler_temperature_limits
+from .protocol import numeric, flag, temperature_limits, is_e10, boiler_temperature_limits, is_cte_ht3
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -15,6 +17,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
             entities.append(AOSmithWaterHeater(coordinator, key))
         elif is_e10(data):
             entities.append(AOSmithBoilerWaterHeater(coordinator, key))
+        elif is_cte_ht3(data):
+            entities.append(AOSmithElectricWaterHeater(coordinator, key))
     async_add_entities(entities)
 
 
@@ -149,3 +153,63 @@ class AOSmithBoilerWaterHeater(AOSmithWaterHeater):
     def extra_state_attributes(self):
         output = self._get_output_data()
         return {key: output[key] for key in ("waterFlow", "waterOutTEMP", "waterTEMP", "powerStatus") if key in output}
+
+
+class AOSmithElectricWaterHeater(AOSmithEntity, WaterHeaterEntity):
+    """CTE-HT3 water temperature and whole-device power."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "electric_temperature"
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_supported_features = (WaterHeaterEntityFeature.TARGET_TEMPERATURE
+                                | WaterHeaterEntityFeature.ON_OFF
+                                | WaterHeaterEntityFeature.OPERATION_MODE)
+    _attr_operation_list = [STATE_OFF, STATE_ELECTRIC]
+    _attr_min_temp = 35
+    _attr_max_temp = 75
+    _attr_target_temperature_step = 1
+    _attr_precision = 1.0
+
+    def __init__(self, coordinator, device_id):
+        super().__init__(coordinator, device_id)
+        config = self.translation.get("entity", {}).get("water_heater", {}).get(self._attr_translation_key, {})
+        self._attr_name = config.get("name", "Water temperature")
+        self._attr_unique_id = f"{device_id}_electric_water_heater"
+
+    @property
+    def current_temperature(self):
+        return numeric(self._get_output_data(), "realTemp")
+
+    @property
+    def target_temperature(self):
+        return numeric(self._get_output_data(), "heatingTemp")
+
+    @property
+    def is_on(self):
+        return flag(self._get_output_data(), "powerStatus")
+
+    @property
+    def current_operation(self):
+        on = self.is_on
+        return None if on is None else STATE_ELECTRIC if on else STATE_OFF
+
+    async def async_set_temperature(self, **kwargs):
+        value = float(kwargs[ATTR_TEMPERATURE])
+        if not math.isfinite(value) or not self.min_temp <= value <= self.max_temp:
+            raise ValueError(f"Temperature must be {self.min_temp}–{self.max_temp} °C")
+        # HomeKit sends fractional temperatures even for whole-degree devices.
+        value = math.floor(value + 0.5)
+        await self.coordinator.async_command(self.device_id, "electric_temperature", {"temperature": value}, {})
+
+    async def async_set_operation_mode(self, operation_mode):
+        if operation_mode == STATE_ELECTRIC:
+            await self.async_turn_on()
+        elif operation_mode == STATE_OFF:
+            await self.async_turn_off()
+        else:
+            raise ValueError(f"Unsupported operation mode: {operation_mode}")
+
+    async def async_turn_on(self, **kwargs):
+        await self.coordinator.async_command(self.device_id, "electric_power", {"value": 1}, {})
+
+    async def async_turn_off(self, **kwargs):
+        await self.coordinator.async_command(self.device_id, "electric_power", {"value": 0}, {})

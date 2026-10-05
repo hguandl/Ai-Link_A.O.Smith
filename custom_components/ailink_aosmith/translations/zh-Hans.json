@@ -394,6 +394,9 @@
         "gas": "燃气加热",
         "cruise": "零冷水",
         "half_pipe": "节能零冷水"
+      },
+      "electric_temperature": {
+        "name": "水温控制"
       }
     },
     "switch": {
@@ -408,6 +411,21 @@
       "half_pipe": {
         "name": "节能零冷水",
         "icon": "mdi:pipe"
+      },
+      "electric_instant_heating": {
+        "name": "即时加热"
+      },
+      "electric_disinfection": {
+        "name": "除菌"
+      },
+      "electric_max_capacity": {
+        "name": "Max 增容"
+      },
+      "electric_reservation": {
+        "name": "预约洗浴"
+      },
+      "electric_heating_mode": {
+        "name": "双胆加热"
       }
     },
     "number": {
@@ -415,6 +433,29 @@
         "name": "一键零冷水运行时长",
         "icon": "mdi:timer-cog",
         "unit": "分钟"
+      },
+      "electric_reservation_hours": {
+        "name": "预约洗浴时间"
+      }
+    },
+    "electric_sensor": {
+      "electric_status": {
+        "name": "设备状态",
+        "icon": "mdi:water-boiler",
+        "value_map": {
+          "off": "关机",
+          "heating": "加热中",
+          "scheduled": "预约中",
+          "keeping_warm": "保温中"
+        }
+      },
+      "faultReportEvent": {
+        "name": "故障信息",
+        "icon": "mdi:alert-circle-outline"
+      },
+      "warnReportEvent": {
+        "name": "告警信息",
+        "icon": "mdi:information-outline"
       }
     }
   }

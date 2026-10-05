@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
-from .protocol import extract_output_data, temperature_command, numeric, is_e10, boiler_command
+from .protocol import extract_output_data, temperature_command, numeric, is_e10, boiler_command, is_cte_ht3, electric_command
 
 from .const import (
     CONF_UPDATE_INTERVAL,
@@ -139,8 +139,11 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
                 if not output:
                     raise HomeAssistantError("Device status is unavailable")
                 device_data = {**self.data.get(device_id, {}), **status}
+                electric = is_cte_ht3(device_data)
                 boiler = is_e10(device_data)
-                if boiler:
+                if electric:
+                    identifier, inputs, expected = electric_command(device_data, identifier, inputs)
+                elif boiler:
                     try:
                         identifier, inputs, expected = boiler_command(device_data, identifier, inputs)
                     except (ValueError, KeyError, TypeError) as err:
@@ -153,7 +156,9 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
                 model = status.get("productModel") or output.get("deviceModel")
                 if not model:
                     raise HomeAssistantError("Device model is unavailable")
-                if boiler:
+                if electric:
+                    await self.api.async_send_command(device_id, identifier, inputs, device_type=model, product_type="17")
+                elif boiler:
                     await self.api.async_send_command(device_id, identifier, inputs, device_type=model, product_type="24")
                 else:
                     await self.api.async_send_command(device_id, identifier, inputs, device_type=model)
