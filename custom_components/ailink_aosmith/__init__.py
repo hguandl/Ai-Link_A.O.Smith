@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
-from .protocol import extract_output_data, temperature_command, numeric, is_e10, boiler_command, is_cte_ht3, electric_command
+from .protocol import extract_output_data, temperature_command, numeric, is_e10, boiler_command, is_cte_ht3, electric_command, device_model
 
 from .const import (
     CONF_UPDATE_INTERVAL,
@@ -129,61 +129,70 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
         )
     
     async def async_command(self, device_id, identifier, inputs, expected):
-        """Serialize writes and require a fresh device report to confirm success."""
+        """Send one command through the shared write queue."""
+        await self.async_commands(device_id, [(identifier, inputs, expected)])
+
+    async def async_commands(self, device_id, commands):
+        """Keep a sequence of confirmed commands under the same write lock."""
         async with self._command_lock:
-            try:
-                status = await self._async_get_recoverable_status(device_id)
-                if not status or str(status.get("devState", "1")) == "0":
-                    raise HomeAssistantError("Device status is unavailable")
+            for identifier, inputs, expected in commands:
+                await self._async_command(device_id, identifier, inputs, expected)
+
+    async def _async_command(self, device_id, identifier, inputs, expected):
+        """Send and confirm a command while the caller holds the write lock."""
+        try:
+            status = await self._async_get_recoverable_status(device_id)
+            if not status or str(status.get("devState", "1")) == "0":
+                raise HomeAssistantError("Device status is unavailable")
+            output = extract_output_data(status)
+            if not output:
+                raise HomeAssistantError("Device status is unavailable")
+            device_data = {**self.data.get(device_id, {}), **status}
+            electric = is_cte_ht3(device_data)
+            boiler = is_e10(device_data)
+            if electric or identifier.startswith("electric_"):
+                identifier, inputs, expected = electric_command(device_data, identifier, inputs)
+            elif boiler:
+                try:
+                    identifier, inputs, expected = boiler_command(device_data, identifier, inputs)
+                except (ValueError, KeyError, TypeError) as err:
+                    raise HomeAssistantError(str(err)) from None
+            elif identifier.startswith("boiler_"):
+                raise HomeAssistantError("E10 device identity is unavailable")
+            elif identifier == "temperature":
+                value = inputs["temperature"]
+                identifier, inputs = temperature_command(output, value)
+            model = device_model(device_data) if electric else status.get("productModel") or output.get("deviceModel")
+            if not model:
+                raise HomeAssistantError("Device model is unavailable")
+            if electric:
+                await self.api.async_send_command(device_id, identifier, inputs, device_type=model, product_type="17")
+            elif boiler:
+                await self.api.async_send_command(device_id, identifier, inputs, device_type=model, product_type="24")
+            else:
+                await self.api.async_send_command(device_id, identifier, inputs, device_type=model)
+            for delay in (1, 2, 3, 4):
+                await asyncio.sleep(delay)
+                status = await self.api.async_get_device_status(device_id)
+                if not status:
+                    continue
                 output = extract_output_data(status)
-                if not output:
-                    raise HomeAssistantError("Device status is unavailable")
-                device_data = {**self.data.get(device_id, {}), **status}
-                electric = is_cte_ht3(device_data)
-                boiler = is_e10(device_data)
-                if electric:
-                    identifier, inputs, expected = electric_command(device_data, identifier, inputs)
-                elif boiler:
-                    try:
-                        identifier, inputs, expected = boiler_command(device_data, identifier, inputs)
-                    except (ValueError, KeyError, TypeError) as err:
-                        raise HomeAssistantError(str(err)) from None
-                elif identifier.startswith("boiler_"):
-                    raise HomeAssistantError("E10 device identity is unavailable")
-                elif identifier == "temperature":
-                    value = inputs["temperature"]
-                    identifier, inputs = temperature_command(output, value)
-                model = status.get("productModel") or output.get("deviceModel")
-                if not model:
-                    raise HomeAssistantError("Device model is unavailable")
-                if electric:
-                    await self.api.async_send_command(device_id, identifier, inputs, device_type=model, product_type="17")
-                elif boiler:
-                    await self.api.async_send_command(device_id, identifier, inputs, device_type=model, product_type="24")
-                else:
-                    await self.api.async_send_command(device_id, identifier, inputs, device_type=model)
-                for delay in (1, 2, 3, 4):
-                    await asyncio.sleep(delay)
-                    status = await self.api.async_get_device_status(device_id)
-                    if not status:
-                        continue
-                    output = extract_output_data(status)
-                    updated = dict(self.data)
-                    updated[device_id] = {**updated.get(device_id, {}), **status, "_status_available": True}
-                    self.async_set_updated_data(updated)
-                    if all(numeric(output, key) == float(value) for key, value in expected.items()):
-                        return
-                raise HomeAssistantError("Command sent, but the device did not confirm the requested state")
-            except HomeAssistantError:
-                raise
-            except AOSmithAuthError:
-                raise HomeAssistantError(
-                    "Access token is temporarily unavailable; open the AI-LiNK app once or replace the token in integration settings"
-                ) from None
-            except AOSmithAPIError:
-                raise HomeAssistantError("Device command failed") from None
-            except Exception:
-                raise HomeAssistantError("Device command failed") from None
+                updated = dict(self.data)
+                updated[device_id] = {**updated.get(device_id, {}), **status, "_status_available": True}
+                self.async_set_updated_data(updated)
+                if all(numeric(output, key) == float(value) for key, value in expected.items()):
+                    return
+            raise HomeAssistantError("Command sent, but the device did not confirm the requested state")
+        except HomeAssistantError:
+            raise
+        except AOSmithAuthError:
+            raise HomeAssistantError(
+                "Access token is temporarily unavailable; open the AI-LiNK app once or replace the token in integration settings"
+            ) from None
+        except AOSmithAPIError:
+            raise HomeAssistantError("Device command failed") from None
+        except Exception:
+            raise HomeAssistantError("Device command failed") from None
 
     async def _async_update_data(self):
         """Fetch data from API."""

@@ -394,9 +394,6 @@
         "gas": "Gas Heating",
         "cruise": "Zero Cold Water",
         "half_pipe": "Eco Zero Cold Water"
-      },
-      "electric_temperature": {
-        "name": "Water temperature"
       }
     },
     "switch": {
@@ -456,6 +453,11 @@
       "warnReportEvent": {
         "name": "Warning information",
         "icon": "mdi:information-outline"
+      }
+    },
+    "climate": {
+      "electric_temperature": {
+        "name": "Water temperature"
       }
     }
   }

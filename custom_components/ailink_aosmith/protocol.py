@@ -5,17 +5,21 @@ import math
 DURATION_PRESETS = (1, 5, 10, 15, 30, 60, 99)
 
 
-def extract_event_data(device_data: dict, identifier: str):
-    """Read one event from the detailed status, falling back to the homepage."""
+def _status_info(device_data: dict) -> dict:
+    """Prefer detailed status over the homepage snapshot."""
     nested = device_data.get("appDeviceStatusInfoEntity")
     raw = nested.get("statusInfo") if isinstance(nested, dict) else None
     raw = raw or device_data.get("statusInfo")
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def extract_event_data(device_data: dict, identifier: str):
+    """Read one event from the preferred status."""
+    parsed = _status_info(device_data)
     events = parsed.get("events", [])
     if isinstance(events, list):
         for event in events:
@@ -137,21 +141,22 @@ def boiler_command(device_data: dict, identifier: str, inputs: dict) -> tuple[st
     return "SetTemperature", {"CommandValue": str(value), "CommandType": "1" if heating else "0"}, {key: value}
 
 
+def device_model(device_data: dict):
+    """Resolve the model consistently for device recognition and control."""
+    profile = _status_info(device_data).get("profile")
+    profile = profile if isinstance(profile, dict) else {}
+    return (device_data.get("productModel")
+            or extract_output_data(device_data).get("deviceModel")
+            or profile.get("deviceType") or profile.get("deviceModel"))
+
+
 def is_cte_ht3(device_data: dict) -> bool:
     """Recognize only the captured category-17 model, including profile-only records."""
-    nested = device_data.get("appDeviceStatusInfoEntity")
-    raw = nested.get("statusInfo") if isinstance(nested, dict) else None
-    raw = raw or device_data.get("statusInfo")
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except (ValueError, TypeError):
-        parsed = None
-    profile = parsed.get("profile") if isinstance(parsed, dict) else None
+    profile = _status_info(device_data).get("profile")
     profile = profile if isinstance(profile, dict) else {}
     category = (device_data.get("deviceCategory")
                 or device_data.get("productMajorClassCode") or profile.get("productType"))
-    model = device_data.get("productModel") or profile.get("deviceType") or profile.get("deviceModel")
-    return str(category) == "17" and model == "CTE-HT3"
+    return str(category) == "17" and device_model(device_data) == "CTE-HT3"
 
 
 def electric_command(device_data, identifier, inputs):

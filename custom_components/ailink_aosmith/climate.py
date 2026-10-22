@@ -1,10 +1,10 @@
-"""HomeKit-compatible thermostat for the gas water heater."""
+"""HomeKit-compatible thermostats for hot water and heating."""
 import math
-from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACMode, HVACAction
+from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACMode, HVACAction, ATTR_HVAC_MODE
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from .const import DOMAIN, DEVICE_CATEGORY_WATER_HEATER
 from .entity import AOSmithEntity
-from .protocol import numeric, flag, temperature_limits, is_e10, boiler_temperature_limits
+from .protocol import numeric, flag, temperature_limits, is_e10, boiler_temperature_limits, is_cte_ht3
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -15,6 +15,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
             entities.append(AOSmithClimate(coordinator, key))
         elif is_e10(data):
             entities.append(AOSmithBoilerClimate(coordinator, key))
+        elif is_cte_ht3(data):
+            entities.append(AOSmithElectricClimate(coordinator, key))
     async_add_entities(entities)
 
 
@@ -160,3 +162,86 @@ class AOSmithBoilerClimate(AOSmithClimate):
             raise ValueError(f"Unsupported HVAC mode: {hvac_mode}")
         value = 1 if hvac_mode == HVACMode.HEAT else 0
         await self.coordinator.async_command(self.device_id, "boiler_heating", {"value": value}, {"warmStatus": value})
+
+
+class AOSmithElectricClimate(AOSmithEntity, ClimateEntity):
+    """CTE-HT3: heat selects one tank; auto selects both tanks."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "electric_temperature"
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_supported_features = (ClimateEntityFeature.TARGET_TEMPERATURE
+                                | ClimateEntityFeature.TURN_ON
+                                | ClimateEntityFeature.TURN_OFF)
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.AUTO]
+    _attr_icon = "mdi:water-boiler"
+    _attr_min_temp = 35
+    _attr_max_temp = 75
+    _attr_target_temperature_step = 1
+    _attr_precision = 1.0
+
+    def __init__(self, coordinator, device_id):
+        super().__init__(coordinator, device_id)
+        config = self.translation.get("entity", {}).get("climate", {}).get(self._attr_translation_key, {})
+        self._attr_name = config.get("name", "Water temperature")
+        self._attr_unique_id = f"{device_id}_electric_climate"
+
+    @property
+    def current_temperature(self):
+        return numeric(self._get_output_data(), "realTemp")
+
+    @property
+    def target_temperature(self):
+        return numeric(self._get_output_data(), "heatingTemp")
+
+    @property
+    def hvac_mode(self):
+        output = self._get_output_data()
+        power = flag(output, "powerStatus")
+        if power is False:
+            return HVACMode.OFF
+        if power is None:
+            return None
+        return {1: HVACMode.HEAT, 2: HVACMode.AUTO}.get(numeric(output, "workModel"))
+
+    @property
+    def hvac_action(self):
+        power = flag(self._get_output_data(), "powerStatus")
+        if power is False:
+            return HVACAction.OFF
+        if power is None:
+            return None
+        heating = flag(self._get_output_data(), "heatStatus")
+        return None if heating is None else HVACAction.HEATING if heating else HVACAction.IDLE
+
+    async def async_set_temperature(self, **kwargs):
+        value = float(kwargs[ATTR_TEMPERATURE])
+        if not math.isfinite(value) or not self.min_temp <= value <= self.max_temp:
+            raise ValueError(f"Temperature must be {self.min_temp}–{self.max_temp} °C")
+        # HomeKit sends fractional temperatures even for whole-degree devices.
+        value = math.floor(value + 0.5)
+        commands = []
+        if ATTR_HVAC_MODE in kwargs:
+            commands.extend(self._mode_commands(kwargs[ATTR_HVAC_MODE]))
+        commands.append(("electric_temperature", {"temperature": value}, {}))
+        await self.coordinator.async_commands(self.device_id, commands)
+
+    def _mode_commands(self, hvac_mode):
+        """Validate the requested mode before issuing any writes."""
+        if hvac_mode not in self.hvac_modes:
+            raise ValueError(f"Unsupported HVAC mode: {hvac_mode}")
+        if hvac_mode == HVACMode.OFF:
+            return [("electric_power", {"value": 0}, {})]
+        value = 1 if hvac_mode == HVACMode.AUTO else 0
+        return [
+            ("electric_power", {"value": 1}, {}),
+            ("electric_heating_mode", {"value": value}, {}),
+        ]
+
+    async def async_set_hvac_mode(self, hvac_mode):
+        await self.coordinator.async_commands(self.device_id, self._mode_commands(hvac_mode))
+
+    async def async_turn_on(self):
+        await self.coordinator.async_command(self.device_id, "electric_power", {"value": 1}, {})
+
+    async def async_turn_off(self):
+        await self.coordinator.async_command(self.device_id, "electric_power", {"value": 0}, {})

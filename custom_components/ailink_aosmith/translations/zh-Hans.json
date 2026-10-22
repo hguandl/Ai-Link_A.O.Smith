@@ -394,9 +394,6 @@
         "gas": "燃气加热",
         "cruise": "零冷水",
         "half_pipe": "节能零冷水"
-      },
-      "electric_temperature": {
-        "name": "水温控制"
       }
     },
     "switch": {
@@ -456,6 +453,11 @@
       "warnReportEvent": {
         "name": "告警信息",
         "icon": "mdi:information-outline"
+      }
+    },
+    "climate": {
+      "electric_temperature": {
+        "name": "水温控制"
       }
     }
   }
