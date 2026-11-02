@@ -90,6 +90,7 @@ class AOSmithBoilerPower(AOSmithEntity, SwitchEntity):
 
 # Translation/command key, reported field, icon
 ELECTRIC_MODES = (
+    ("electric_power", "powerStatus", "mdi:power"),
     ("electric_instant_heating", "instantHeating", "mdi:water-boiler"),
     ("electric_disinfection", "disinfection", "mdi:bacteria-outline"),
     ("electric_max_capacity", "increaseCapacity", "mdi:water-plus"),
@@ -109,6 +110,13 @@ class AOSmithElectricSwitch(AOSmithEntity, SwitchEntity):
         self._attr_translation_key = key
         self._attr_name = self.translation.get("entity", {}).get("switch", {}).get(key, {}).get("name", key)
         self._attr_unique_id = f"{device_id}_{key}"
+
+    @property
+    def available(self):
+        return super().available and (
+            self._command == "electric_power"
+            or flag(self._get_output_data(), "powerStatus") is True
+        )
 
     @property
     def is_on(self):

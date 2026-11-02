@@ -151,7 +151,17 @@ class AOSmithDataUpdateCoordinator(DataUpdateCoordinator):
             electric = is_cte_ht3(device_data)
             boiler = is_e10(device_data)
             if electric or identifier.startswith("electric_"):
-                identifier, inputs, expected = electric_command(device_data, identifier, inputs)
+                skip_unchanged = identifier in ("electric_power", "electric_temperature", "electric_heating_mode")
+                try:
+                    identifier, inputs, expected = electric_command(device_data, identifier, inputs)
+                except (ValueError, KeyError, TypeError) as err:
+                    raise HomeAssistantError(str(err)) from None
+                # Skip unchanged power, temperature and tank mode using fresh status.
+                if skip_unchanged and all(numeric(output, key) == float(value) for key, value in expected.items()):
+                    updated = dict(self.data)
+                    updated[device_id] = {**device_data, "_status_available": True}
+                    self.async_set_updated_data(updated)
+                    return
             elif boiler:
                 try:
                     identifier, inputs, expected = boiler_command(device_data, identifier, inputs)

@@ -409,6 +409,9 @@
         "name": "节能零冷水",
         "icon": "mdi:pipe"
       },
+      "electric_power": {
+        "name": "电源"
+      },
       "electric_instant_heating": {
         "name": "即时加热"
       },

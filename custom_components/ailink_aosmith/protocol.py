@@ -163,6 +163,8 @@ def electric_command(device_data, identifier, inputs):
     """Translate verified CTE-HT3 actions and their confirmation fields."""
     if not is_cte_ht3(device_data) or str(device_data.get("devState", "1")) == "0":
         raise ValueError("CTE-HT3 is unavailable")
+    if identifier != "electric_power" and flag(extract_output_data(device_data), "powerStatus") is not True:
+        raise ValueError("Turn on the water heater power switch first")
     if identifier == "electric_power":
         value = validate_integer(inputs["value"], 0, 1)
         command, expected = {"powerStatus": str(value)}, {"powerStatus": value}

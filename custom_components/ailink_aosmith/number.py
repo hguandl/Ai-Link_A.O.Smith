@@ -3,7 +3,7 @@ from homeassistant.components.number import NumberEntity, NumberMode, NumberDevi
 from homeassistant.const import UnitOfTime
 from .const import DOMAIN, DEVICE_CATEGORY_WATER_HEATER
 from .entity import AOSmithEntity
-from .protocol import numeric, validate_integer, is_cte_ht3
+from .protocol import numeric, validate_integer, is_cte_ht3, flag
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -56,6 +56,10 @@ class AOSmithReservationHours(AOSmithEntity, NumberEntity):
         super().__init__(coordinator, device_id)
         self._attr_name = self.translation.get("entity", {}).get("number", {}).get(self._attr_translation_key, {}).get("name", "Bathing reservation delay")
         self._attr_unique_id = f"{device_id}_electric_reservation_hours"
+
+    @property
+    def available(self):
+        return super().available and flag(self._get_output_data(), "powerStatus") is True
 
     @property
     def native_value(self):

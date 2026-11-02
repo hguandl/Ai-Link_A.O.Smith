@@ -409,6 +409,9 @@
         "name": "Eco Zero Cold Water",
         "icon": "mdi:pipe"
       },
+      "electric_power": {
+        "name": "Power"
+      },
       "electric_instant_heating": {
         "name": "Instant heating"
       },

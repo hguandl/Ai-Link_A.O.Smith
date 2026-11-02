@@ -219,26 +219,27 @@ class AOSmithElectricClimate(AOSmithEntity, ClimateEntity):
             raise ValueError(f"Temperature must be {self.min_temp}–{self.max_temp} °C")
         # HomeKit sends fractional temperatures even for whole-degree devices.
         value = math.floor(value + 0.5)
-        commands = []
-        if ATTR_HVAC_MODE in kwargs:
-            commands.extend(self._mode_commands(kwargs[ATTR_HVAC_MODE]))
-        commands.append(("electric_temperature", {"temperature": value}, {}))
+        commands = self._control_commands(kwargs.get(ATTR_HVAC_MODE), value)
         await self.coordinator.async_commands(self.device_id, commands)
 
-    def _mode_commands(self, hvac_mode):
-        """Validate the requested mode before issuing any writes."""
-        if hvac_mode not in self.hvac_modes:
+    def _control_commands(self, hvac_mode, temperature=None):
+        """Validate first, then order power, temperature and tank selection."""
+        if hvac_mode not in self.hvac_modes and (hvac_mode is not None or temperature is None):
             raise ValueError(f"Unsupported HVAC mode: {hvac_mode}")
+        commands = []
+        if hvac_mode != HVACMode.OFF or temperature is not None:
+            commands.append(("electric_power", {"value": 1}, {}))
+        if temperature is not None:
+            commands.append(("electric_temperature", {"temperature": temperature}, {}))
         if hvac_mode == HVACMode.OFF:
-            return [("electric_power", {"value": 0}, {})]
-        value = 1 if hvac_mode == HVACMode.AUTO else 0
-        return [
-            ("electric_power", {"value": 1}, {}),
-            ("electric_heating_mode", {"value": value}, {}),
-        ]
+            commands.append(("electric_power", {"value": 0}, {}))
+        elif hvac_mode is not None:
+            value = 1 if hvac_mode == HVACMode.AUTO else 0
+            commands.append(("electric_heating_mode", {"value": value}, {}))
+        return commands
 
     async def async_set_hvac_mode(self, hvac_mode):
-        await self.coordinator.async_commands(self.device_id, self._mode_commands(hvac_mode))
+        await self.coordinator.async_commands(self.device_id, self._control_commands(hvac_mode))
 
     async def async_turn_on(self):
         await self.coordinator.async_command(self.device_id, "electric_power", {"value": 1}, {})
